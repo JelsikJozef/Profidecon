@@ -1,2 +1,13 @@
-# created by virtualenv automatically
-.venv/bin
+# Ignoruj celé virtuálne prostredie
+.venv/
+
+# Ignoruj cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignoruj editorové a OS súbory
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
