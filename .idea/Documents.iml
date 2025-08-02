@@ -6,7 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/Knowledge/Know-How/KNOW - HOW/Stanoviská od Veroniky/Lehoty" />
       <excludeFolder url="file://$MODULE_DIR$/Knowledge/TEMPLATES/E-mails/Dopyty - odpovede/Zlúčenie rodiny" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.12 (Profidecon)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.12 virtualenv at ~/Documents/Profidecon/.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
