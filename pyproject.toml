@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "profidecon-preprocessor"
+version = "0.1.0"
+description = "Document preprocessor for RAG"
+requires-python = ">=3.11"
+
+dependencies = [
+  "typer[all]",
+  "openai>=1.30",
+  "pdfminer.six",
+  "python-docx",
+  "extract-msg",
+  "pdf2image",
+  "pytesseract",
+  "langdetect",
+  "prometheus_client",
+  "tqdm",
+]
+
+[project.scripts]
+preproc = "preprocessor.cli:main"
+
+[tool.setuptools.packages.find]
+# kde hľadať balíčky
+where = ["."]
+# zahrni iba `preprocessor` a jeho podbalíčky
+include = ["preprocessor*",]
+# explicitne nevkladaj žiadne cudzie priečinky
+exclude = ["Knowledge", "Preprocessed", "tests"]
