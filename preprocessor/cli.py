@@ -86,8 +86,9 @@ def main():
 
     # taxonomy analyze
     p_ana = subparsers.add_parser("taxonomy-analyze", help="Generate taxonomy from raw metadata")
-    p_ana.add_argument("root", type=Path, help="Root folder path")  # Add this line
-    p_ana.add_argument("--raw", type=Path, default=Path("metadata_raw.jsonl"), help="Path to raw metadata JSONL")
+    p_ana.add_argument("root", type=Path, help="Root folder path")
+    p_ana.add_argument("--preprocessed", type=Path, default=Path("Preprocessed"),
+                       help="Path to directory with preprocessed JSONL files")
     p_ana.add_argument("--out", type=Path, default=Path("taxonomy.json"), help="Output taxonomy JSON file")
 
     args = parser.parse_args()
@@ -100,6 +101,6 @@ def main():
         files = (p for p in args.root.rglob("*.*") if p.is_file())
         ext.process_files(files)
     elif args.command == "taxonomy-analyze":
-        analyze_taxonomy(root=args.root, raw_meta=args.raw, out_tax=args.out)
+        analyze_taxonomy(root=args.root, preprocessed_dir=args.preprocessed, out_tax=args.out)
 if __name__ == "__main__":
     main()
