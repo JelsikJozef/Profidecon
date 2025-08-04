@@ -54,7 +54,8 @@ def build_tag_corpus(records: List[Dict[str, Any]]):
     :return: Tuple of TF-IDF matrix and feature names."""
     # flatten all tags
     docs = [' '.join(rec.get('tagy', [])) for rec in records]
-    vectorizer = TfidfVectorizer()
+    # allow single-character tags by adjusting token_pattern
+    vectorizer = TfidfVectorizer(token_pattern=r"(?u)\b\w+\b")
     X = vectorizer.fit_transform(docs)
     return X, vectorizer.get_feature_names_out()
 
@@ -76,14 +77,14 @@ def propose_taxonomy(tags: List[str]) -> Dict[str, Any]:
     logger.info("Using prompt: %s", prompt[:200] + "..." if len(prompt) > 200 else prompt)
 
     try:
-        client = openai.OpenAI()
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
         logger.info("Sending request to OpenAI API with model: %s", MODEL_NAME)
 
-        resp = client.chat.completions.create(
+        resp = openai.ChatCompletion.create(
             model=MODEL_NAME,
             messages=messages,
             max_tokens=1000,  # Changed back to max_tokens for older models
@@ -94,7 +95,14 @@ def propose_taxonomy(tags: List[str]) -> Dict[str, Any]:
             logger.error("Empty response from OpenAI API")
             return {}
 
-        content = resp.choices[0].message.content.strip()
+        message = resp.choices[0].message
+        if hasattr(message, "content"):
+            content = message.content
+        elif isinstance(message, dict):
+            content = message.get("content", "")
+        else:
+            content = ""
+        content = content.strip()
         if not content:
             logger.error("Empty content in OpenAI response")
             return {}

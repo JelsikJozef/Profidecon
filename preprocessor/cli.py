@@ -5,6 +5,7 @@ Main CLI for Document Preprocessor including Taxonomy modules
 import argparse
 import logging
 import asyncio
+import time
 from pathlib import Path
 
 from preprocessor.ingestion import ingest_batch
@@ -35,13 +36,16 @@ def run_pipeline(input_dir: Path, output_dir: Path):
     for raw in docs:
         try:
             # 1) Parse
+            logger.info(f"→ Parsing {raw.path.name}")
             parser = registry.get_parser(raw.path.suffix)
             parsed = parser.parse(raw.path)
 
             # 2) Normalize
+            logger.info("→ Normalizing content")
             normed = normalize(parsed)
 
             # 3) OCR fallback only for PDF
+            logger.info("→ Checking for OCR needs")
             if raw.path.suffix.lower() == ".pdf" and needs_ocr(normed):
                 logger.info(f"OCR for {raw.path.name}")
                 parsed = apply_ocr(raw.path)
@@ -49,6 +53,7 @@ def run_pipeline(input_dir: Path, output_dir: Path):
                 parsed = normed
 
             # 4) Enrich
+            logger.info("→ Enriching metadata")
             enriched = enricher.enrich(parsed)
 
             # 5) Dedup
