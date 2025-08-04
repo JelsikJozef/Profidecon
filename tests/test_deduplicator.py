@@ -16,3 +16,11 @@ def test_deduplication():
     doc3 = ParsedDocument(text="World", metadata={})
     out3 = dedup.process(doc3)
     assert out3.metadata["is_duplicate"] is False
+
+
+def test_deduplicator_preserves_summary_and_tags():
+    dedup = Deduplicator()
+    doc = ParsedDocument(text="Hello", metadata={}, summary="sum", tags=["tag"])
+    out = dedup.process(doc)
+    assert out.summary == "sum"
+    assert out.tags == ["tag"]

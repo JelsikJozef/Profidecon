@@ -22,3 +22,11 @@ def test_big_quality(big_doc):
     qc = QualityChecker(max_bytes=1000, max_lines=1000)
     out = qc.process(big_doc)
     assert out.metadata["requires_split"] is True
+
+
+def test_quality_checker_preserves_summary_and_tags(small_doc):
+    qc = QualityChecker()
+    doc = ParsedDocument(text=small_doc.text, metadata={}, summary="sum", tags=["tag"])
+    out = qc.process(doc)
+    assert out.summary == "sum"
+    assert out.tags == ["tag"]

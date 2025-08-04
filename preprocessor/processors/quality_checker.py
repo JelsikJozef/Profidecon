@@ -21,4 +21,9 @@ class QualityChecker:
             "line_count": lines,
             "requires_split": requires_split,
         }
-        return ParsedDocument(text=text, metadata=new_meta)
+        return ParsedDocument(
+            text=text,
+            metadata=new_meta,
+            summary=doc.summary,
+            tags=doc.tags,
+        )

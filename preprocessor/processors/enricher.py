@@ -1,8 +1,26 @@
 import hashlib
 from pathlib import Path
+from pyexpat.errors import messages
+
 from langdetect import detect
+import json
+import os
+import re
+import logging
+from collections import Counter
 from preprocessor.parsers.base import ParsedDocument
 from .normalizer import normalize
+from dotenv import load_dotenv
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+
+# Importovanie knižnice pre jazykovú detekciu
+try:
+    from langdetect import detect
+except ImportError:
+    def detec(_text: str) -> str:
+        return "unknown"
 
 # jednoduchý odhad tokenov podľa splitu na whitespace
 def estimate_tokens(text: str) -> int:
@@ -24,7 +42,12 @@ class Enricher:
     def enrich(self, doc: ParsedDocument) -> ParsedDocument:
         path = Path(doc.metadata.get("source", ""))
         # 1) Normalize už spracovaný text (ak potrebujeme)
+        logger.info(f"\tNormalizing text for {path.name}")
         text = normalize(doc).text
+
+        #1a) Generuje summary a tags cez LLM (ak je dostupné)
+        logger.info(f"\tGenerating summary and tags for {path.name}")
+        summary, tags = generate_summary_and_tags(text)
 
         # 2) Základné súborové vlastnosti
         size = path.stat().st_size
@@ -63,4 +86,50 @@ class Enricher:
             "category": category,
         }
 
-        return ParsedDocument(text=text, metadata=new_meta)
+        return ParsedDocument(
+            text=text, summary=summary, tags=tags,
+            metadata=new_meta
+        )
+LLM_MODEL = "gpt-4o-mini"
+
+def generate_summary_and_tags(text: str) -> tuple[str, list[str]]:
+    """
+    Generuje súhrn a tagy pomocou LLM.
+    Tu by mal byť implementovaný volanie na OpenAI API alebo iný LLM.
+    """
+    try:
+       from openai import OpenAI
+       if not os.getenv("OPENAI_API_KEY"):
+           raise RuntimeError("OpenAI API key not found.")
+       client = OpenAI()
+       snippet = text[:1000]  # Prvých 1000 znakov textu
+       messages = [
+            {
+                "role": "system",
+                "content": "Summarize the provided text in Slovak and extract up to 5 short tags."
+                "Respond in Slovak with JSON using keys 'summary' and 'tags'.",
+            },
+            {"role": "user", "content": snippet},
+       ]
+       resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            max_tokens=500,
+            temperature=0.0,
+        )
+       if not resp or not resp.choices:
+            raise ValueError("No response from LLM.")
+       content = resp.choices[0].message.content.strip()
+       content = content.replace("```json", "").replace("```", "").strip()
+       data = json.loads(content)
+       summary = data.get("summary", "")
+       tags = data.get("tags", [])
+       if isinstance(tags, str):
+           tags = [t.strip() for t in tags.split(",") if t.strip()]
+       return summary, tags
+    except Exception:
+        # V prípade chyby v LLM, vrátime prázdne hodnoty
+        print("Error generating summary and tags")
+        return "", []
+
+

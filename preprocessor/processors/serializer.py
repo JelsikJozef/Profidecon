@@ -1,3 +1,4 @@
+
 import json
 from pathlib import Path
 from preprocessor.parsers.base import ParsedDocument
@@ -18,10 +19,12 @@ class JsonlSerializer:
         out_path = self.output_dir / filename
 
         with open(out_path, "w", encoding="utf-8") as f:
-            # zachováme text aj všetky metadata
-            json.dump({
+            payload = {
                 "text": doc.text,
-                "metadata": doc.metadata
-            }, f, ensure_ascii=False)
+                "summary": doc.summary,
+                "tags": doc.tags,
+                **{k: v for k, v in doc.metadata.items() if k != "hash_sha1"},
+            }
+            json.dump(payload, f, ensure_ascii=False)
             f.write("\n")
         return out_path

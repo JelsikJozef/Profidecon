@@ -33,7 +33,8 @@ if not openai.api_key:
 SYSTEM_PROMPT = (
     "You are a Slovak domain expert. "
     "Extract structured JSON metadata from the given file snippet. "
-    "Return only a JSON object with keys: typ_suboru, povaha_suboru, tagy, sumar."
+    "Return only a JSON object with keys: typ_suboru, tagy, sumar. "
+    "Use Slovak language when describing the file's nature and tags. "
 )
 
 
