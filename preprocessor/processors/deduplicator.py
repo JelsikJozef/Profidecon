@@ -26,4 +26,11 @@ class Deduplicator:
             "hash_content": doc_hash,
             "is_duplicate": is_dup,
         }
-        return ParsedDocument(text=doc.text, metadata=new_meta)
+
+        # Preserve existing summary and tags when returning the new document
+        return ParsedDocument(
+            text=doc.text,
+            metadata=new_meta,
+            summary=doc.summary,
+            tags=doc.tags,
+        )
