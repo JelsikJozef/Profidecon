@@ -1,6 +1,5 @@
 # tests/test_analyzer.py
 import json
-import os
 from pathlib import Path
 import pytest
 from preprocessor.taxonomy.analyzer import (
@@ -11,33 +10,36 @@ from preprocessor.taxonomy.analyzer import (
 )
 
 
-# Fixture: create a temporary metadata_raw.jsonl
+# Fixture: create a temporary Preprocessed directory with JSONL files
 @pytest.fixture
-def sample_metadata(tmp_path):
+def sample_metadata(tmp_path: Path) -> Path:
     records = [
-        {"cesta_k_suboru": "/tmp/doc1.pdf", "nazov_suboru": "doc1.pdf", "tagy": ["a", "b"], "sumar": "text1"},
-        {"cesta_k_suboru": "/tmp/doc2.pdf", "nazov_suboru": "doc2.pdf", "tagy": ["b", "c"], "sumar": "text2"},
+        {"source": "/tmp/doc1.pdf", "tags": ["a", "b"], "summary": "text1"},
+        {"source": "/tmp/doc2.pdf", "tags": ["b", "c"], "summary": "text2"},
     ]
-    path = tmp_path / "metadata_raw.jsonl"
-    with open(path, 'w', encoding='utf-8') as f:
-        for rec in records:
+    pre_dir = tmp_path / "Preprocessed"
+    pre_dir.mkdir()
+    for idx, rec in enumerate(records):
+        path = pre_dir / f"file{idx}.jsonl"
+        with path.open('w', encoding='utf-8') as f:
             json.dump(rec, f, ensure_ascii=False)
             f.write("\n")
-    return path
+    return pre_dir
 
 
-def test_load_raw_metadata(sample_metadata):
+def test_load_raw_metadata(sample_metadata: Path):
     records = load_raw_metadata(sample_metadata)
     assert isinstance(records, list)
     assert len(records) == 2
-    assert records[0]["nazov_suboru"] == "doc1.pdf"
+    summaries = {rec["summary"] for rec in records}
+    assert "text1" in summaries and "text2" in summaries
 
 
-def test_build_tag_corpus_and_cluster(sample_metadata):
+def test_build_tag_corpus_and_cluster(sample_metadata: Path):
     records = load_raw_metadata(sample_metadata)
     X, features = build_tag_corpus(records)
     # TF-IDF matrix should match shape (2 docs, number of unique tags)
-    unique_tags = sorted({t for rec in records for t in rec.get("tagy", [])})
+    unique_tags = sorted({t for rec in records for t in rec.get("tags", [])})
     assert X.shape == (2, len(unique_tags))
     labels = cluster_tags(X, n_clusters=2)
     assert list(labels) in ([0, 1], [1, 0])  # two distinct clusters
