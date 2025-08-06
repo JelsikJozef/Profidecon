@@ -220,8 +220,13 @@ def save_taxonomy(tree: Dict[str, Any], out_path: Path):
     """Save the proposed taxonomy to a JSON file.
     :param tree: Proposed taxonomy as a dictionary.
     :param out_path: Path to save the taxonomy JSON file."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open('w', encoding='utf-8') as f:
+    # If out_path is a directory, save as taxonomy.json inside it
+    if out_path.is_dir():
+        out_file = out_path / "taxonomy.json"
+    else:
+        out_file = out_path
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with out_file.open('w', encoding='utf-8') as f:
         json.dump(tree, f, ensure_ascii=False, indent=2)
 
 
