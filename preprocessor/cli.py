@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_pipeline(input_dir: Path, output_dir: Path):
+    counter = 0
     """Run document preprocessing pipeline"""
     logger.info(f"📂 Ingesting from {input_dir}")
     docs = asyncio.run(ingest_batch(input_dir))
@@ -34,9 +35,10 @@ def run_pipeline(input_dir: Path, output_dir: Path):
     serializer  = JsonlSerializer(output_dir=output_dir)
 
     for raw in docs:
+        counter += 1
         try:
             # 1) Parse
-            logger.info(f"→ Parsing {raw.path.name}")
+            logger.info(f"→ {counter} Parsing {raw.path.name}")
             parser = registry.get_parser(raw.path.suffix)
             parsed = parser.parse(raw.path)
 
