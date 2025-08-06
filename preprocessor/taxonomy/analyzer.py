@@ -3,7 +3,7 @@
 Analyzer for taxonomy proposals
 
 • Načíta všetky JSONL súbory z adresára Preprocessed
-• Extrahuje všetky tagy a sumar
+• Extrahuje všetky tagy, sumáre a zmienky o krajinách
 • Použije sklearn na hierarchické clustering tagov
 • Vytvorí predbežný strom kategórií
 • Pošle strom LLM pre vyladenie (OpenAI gpt-4o)
@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Set, Iterator
 from dotenv import load_dotenv
-import glob
+import re
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -31,10 +31,11 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "gpt-4o"
 SYSTEM_PROMPT = (
     "You are a Slovak domain expert specializing in document classification and information architecture. "
-    "I will provide a list of document tags extracted from legal and administrative documents. "
+    "I will provide a list of document tags, categories, and countries extracted from legal and administrative documents. "
     "Propose a hierarchical taxonomy in JSON with nested categories and sample tag mappings in Slovak language. "
     "The taxonomy should be optimized for RAG (Retrieval Augmented Generation) systems. "
     "Focus on creating logical groupings with no more than 3 levels of hierarchy. "
+    "IMPORTANT: Include a separate top-level category named 'Krajiny' that lists all the countries mentioned in the documents. "
     "Return only the JSON definition in Slovak language with this structure:"
     """
     {
@@ -47,6 +48,22 @@ SYSTEM_PROMPT = (
               "nazov": "Podkategória 1.1",
               "popis": "Krátky popis podkategórie",
               "tagy": ["tag1", "tag2", "tag3"]
+            }
+          ]
+        },
+        {
+          "nazov": "Krajiny",
+          "popis": "Zoznam krajín vyskytujúcich sa v dokumentoch",
+          "podkategorie": [
+            {
+              "nazov": "Európa",
+              "popis": "Európske krajiny",
+              "tagy": ["Slovensko", "Česko"]
+            },
+            {
+              "nazov": "Ázia",
+              "popis": "Ázijské krajiny",
+              "tagy": ["Japonsko", "Čína"]
             }
           ]
         }
@@ -188,8 +205,6 @@ def propose_taxonomy(tags: Set[str], categories: Set[str]) -> Dict[str, Any]:
         logger.info(f"Received response content (first 200 chars): {content[:200] + '...' if len(content) > 200 else content}")
 
         try:
-            import re
-
             # Remove Markdown code block markers if present
             if content.startswith("```"):
                 content = content.split('\n', 1)[1]
