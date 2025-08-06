@@ -3,12 +3,13 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "profidecon-preprocessor"
+name = "profidecon"
 version = "0.1.0"
-description = "Document preprocessor for RAG"
+description = "Document preprocessing and RAG pipeline for legal/administrative documents"
 requires-python = ">=3.11"
 
 dependencies = [
+  "click>=8.0",
   "typer[all]",
   "openai>=1.30",
   "pdfminer.six",
@@ -19,15 +20,22 @@ dependencies = [
   "langdetect",
   "prometheus_client",
   "tqdm",
+  "sentence-transformers",
+  "scikit-learn",
+  "numpy",
+  "qdrant-client",
+  "python-dotenv",
 ]
 
 [project.scripts]
+profidecon = "profidecon.__main__:profidecon"
+# Keep legacy entry point for backward compatibility
 preproc = "preprocessor.cli:main"
 
 [tool.setuptools.packages.find]
 # kde hľadať balíčky
 where = ["."]
-# zahrni iba `preprocessor` a jeho podbalíčky
-include = ["preprocessor*",]
+# zahrni preprocessor, vectorizer a main module
+include = ["profidecon*", "preprocessor*", "vectorizer*"]
 # explicitne nevkladaj žiadne cudzie priečinky
-exclude = ["Knowledge", "Preprocessed", "tests"]
+exclude = ["Knowledge", "Preprocessed", "tests", "Sample", "Taxonomy, .env"]
