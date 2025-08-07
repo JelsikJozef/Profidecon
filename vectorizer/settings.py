@@ -95,6 +95,26 @@ class Settings(BaseSettings):
         description="OpenAI API key for taxonomy and embedding"
     )
 
+    # ──────────────────────────────────────────────
+    # Retrieval and search configuration
+    # ──────────────────────────────────────────────
+    tag_boost: float = Field(
+        default=0.20,
+        description="Tag boost factor for hybrid search (0.0 to 1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    search_limit: int = Field(
+        default=10,
+        description="Default number of search results to return",
+        ge=1,
+        le=100
+    )
+    use_summary_vector: bool = Field(
+        default=False,
+        description="Whether to search summary vectors by default"
+    )
+
     @validator('device')
     def validate_device(cls, v):
         allowed_devices = ['cpu', 'cuda', 'mps']
