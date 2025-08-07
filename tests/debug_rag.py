@@ -59,7 +59,7 @@ def check_ground_truth():
     """Check the ground truth file format"""
     print("\n🎯 Checking ground truth file...")
 
-    gt_file = "tests/ground_truth.csv"
+    gt_file = "ground_truth.csv"
     if not Path(gt_file).exists():
         print(f"❌ Ground truth file not found: {gt_file}")
         return False
@@ -138,7 +138,7 @@ def fix_ground_truth():
     """Create a corrected ground truth file with proper UUIDs"""
     print("\n🔧 Attempting to fix ground truth file...")
 
-    gt_file = "tests/ground_truth.csv"
+    gt_file = "ground_truth.csv"
     if not Path(gt_file).exists():
         print(f"❌ Ground truth file not found: {gt_file}")
         return False
@@ -153,7 +153,7 @@ def fix_ground_truth():
         )
 
         # Save corrected version
-        corrected_file = "tests/ground_truth_corrected.csv"
+        corrected_file = "ground_truth_corrected.csv"
         df[['query', 'expected_doc_id']].to_csv(corrected_file, index=False)
 
         print(f"✅ Created corrected ground truth file: {corrected_file}")

@@ -89,7 +89,7 @@ class QdrantLoader:
             raise RuntimeError(f"Could not connect to Qdrant at {self.settings.qdrant_url}: {e}") from e
 
     def _ensure_collection_exists(self) -> None:
-        """Create collection if it doesn't exist."""
+        """Create collection if it doesn't exist with dual vector support (body + summary)."""
         if not self.client:
             raise RuntimeError("Qdrant client not initialized")
 
@@ -105,16 +105,22 @@ class QdrantLoader:
             # Get embedding dimension
             embedding_dim = self.embedder.get_embedding_dimension()
 
-            # Create collection
+            # Create collection with dual vector support
             self.client.create_collection(
                 collection_name=self.settings.qdrant_collection,
-                vectors_config=qdrant_models.VectorParams(
-                    size=embedding_dim,
-                    distance=qdrant_models.Distance.COSINE
-                )
+                vectors_config={
+                    "body": qdrant_models.VectorParams(
+                        size=embedding_dim,
+                        distance=qdrant_models.Distance.COSINE
+                    ),
+                    "summary": qdrant_models.VectorParams(
+                        size=embedding_dim,
+                        distance=qdrant_models.Distance.COSINE
+                    )
+                }
             )
 
-            logger.info(f"Created collection '{self.settings.qdrant_collection}' with dimension {embedding_dim}")
+            logger.info(f"Created collection '{self.settings.qdrant_collection}' with dual vectors (body + summary), dimension {embedding_dim}")
 
         except Exception as e:
             logger.error(f"Failed to create collection: {e}")
@@ -178,7 +184,7 @@ class QdrantLoader:
 
     def _prepare_document_for_upload(self, file_path: Path, document_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Prepare a document for upload to Qdrant.
+        Prepare a document for upload to Qdrant with dual vectors (body + summary).
 
         Args:
             file_path: Path to the source file
@@ -197,6 +203,12 @@ class QdrantLoader:
             logger.warning(f"Document in {file_path} has empty text")
             return None
 
+        # Get summary for dual vector embedding
+        summary = document_data.get('summary', '')
+        if not summary or not summary.strip():
+            # Fallback to first 200 characters of text if no summary
+            summary = text[:200] + "..." if len(text) > 200 else text
+
         # Prepare metadata payload
         payload = {
             'text': text,
@@ -204,7 +216,7 @@ class QdrantLoader:
             'hash_content': document_data.get('hash_content', ''),
             'category': document_data.get('category', ''),
             'language': document_data.get('language', ''),
-            'summary': document_data.get('summary', ''),
+            'summary': summary,
             'tags': document_data.get('tags', []),
             'created_ts': document_data.get('created_ts', 0.0),
             'modified_ts': document_data.get('modified_ts', 0.0),
@@ -226,6 +238,7 @@ class QdrantLoader:
         return {
             'id': doc_id,
             'text': text,
+            'summary': summary,
             'payload': payload
         }
 
@@ -265,7 +278,7 @@ class QdrantLoader:
 
     def load_directory(self, folder: Path, pattern: str = "**/*.jsonl") -> ProcessingStats:
         """
-        Load JSONL files from directory and upload to Qdrant.
+        Load JSONL files from directory and upload to Qdrant with dual vectors (body + summary).
 
         Args:
             folder: Directory containing JSONL files
@@ -288,6 +301,7 @@ class QdrantLoader:
             # Collect documents for batch processing
             documents = []
             texts_for_embedding = []
+            summaries_for_embedding = []
 
             # Load and prepare documents
             for file_path, document_data in self._load_jsonl_files(folder, pattern):
@@ -295,37 +309,46 @@ class QdrantLoader:
                 if prepared_doc:
                     documents.append(prepared_doc)
                     texts_for_embedding.append(prepared_doc['text'])
+                    summaries_for_embedding.append(prepared_doc['summary'])
                     self.stats.total_documents += 1
 
             if not documents:
                 logger.warning("No valid documents found to process")
                 return self.stats
 
-            logger.info(f"Generating embeddings for {len(documents)} documents...")
+            logger.info(f"Generating dual embeddings for {len(documents)} documents...")
 
-            # Generate embeddings in batches
-            embeddings = self.embedder.embed_texts(texts_for_embedding, show_progress=True)
+            # Generate embeddings for both text and summary
+            logger.info("Generating body embeddings...")
+            body_embeddings = self.embedder.embed_texts(texts_for_embedding, show_progress=True)
 
-            if len(embeddings) != len(documents):
-                logger.error(f"Embedding count mismatch: {len(embeddings)} != {len(documents)}")
+            logger.info("Generating summary embeddings...")
+            summary_embeddings = self.embedder.embed_texts(summaries_for_embedding, show_progress=True)
+
+            if len(body_embeddings) != len(documents) or len(summary_embeddings) != len(documents):
+                logger.error(f"Embedding count mismatch: body={len(body_embeddings)}, summary={len(summary_embeddings)}, docs={len(documents)}")
                 return self.stats
 
             # Upload to Qdrant in batches
             batch_size = self.settings.batch_size
             total_batches = (len(documents) + batch_size - 1) // batch_size
 
-            logger.info(f"Uploading {len(documents)} documents in {total_batches} batches...")
+            logger.info(f"Uploading {len(documents)} documents with dual vectors in {total_batches} batches...")
 
             for i in tqdm(range(0, len(documents), batch_size), desc="Uploading batches"):
                 batch_docs = documents[i:i + batch_size]
-                batch_embeddings = embeddings[i:i + batch_size]
+                batch_body_embeddings = body_embeddings[i:i + batch_size]
+                batch_summary_embeddings = summary_embeddings[i:i + batch_size]
 
-                # Create points for this batch
+                # Create points for this batch with dual vectors
                 points_batch = []
-                for doc, embedding in zip(batch_docs, batch_embeddings):
+                for doc, body_emb, summary_emb in zip(batch_docs, batch_body_embeddings, batch_summary_embeddings):
                     point = qdrant_models.PointStruct(
                         id=doc['id'],
-                        vector=embedding,
+                        vector={
+                            "body": body_emb,
+                            "summary": summary_emb
+                        },
                         payload=doc['payload']
                     )
                     points_batch.append(point)
@@ -338,7 +361,7 @@ class QdrantLoader:
             self.stats.end_time = time.time()
 
             # Log final statistics
-            logger.info("=== Vector Loading Complete ===")
+            logger.info("=== Dual Vector Loading Complete ===")
             logger.info(f"Total files processed: {self.stats.processed_files}/{self.stats.total_files}")
             logger.info(f"Total documents: {self.stats.total_documents}")
             logger.info(f"Successful uploads: {self.stats.successful_uploads}")
