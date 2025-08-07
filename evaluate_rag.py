@@ -9,6 +9,7 @@ It loads ground truth queries, retrieves documents, and computes retrieval metri
 import sys
 import pandas as pd
 import numpy as np
+import uuid
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 import warnings
@@ -71,7 +72,7 @@ class RAGEvaluator:
             print(f"[ERROR] Failed to setup environment: {e}")
             sys.exit(1)
 
-    def load_ground_truth(self, file_path: str = "tests/ground_truth_corrected.csv") -> pd.DataFrame:
+    def load_ground_truth(self, file_path: str = "tests/human.csv") -> pd.DataFrame:
         """
         Load ground truth data from CSV file.
 
@@ -185,6 +186,22 @@ class RAGEvaluator:
                 print(f"[ERROR] Failed to retrieve documents: {e2}")
                 return []
 
+    def _hash_to_uuid(self, hash_content: str) -> str:
+        """
+        Convert hash_content to UUID format using the same method as vectorizer.
+
+        Args:
+            hash_content: SHA-1 hash content (40 characters)
+
+        Returns:
+            UUID string
+        """
+        if len(hash_content) == 40:  # SHA-1 hash
+            return str(uuid.uuid5(uuid.NAMESPACE_DNS, hash_content))
+        else:
+            # If it's already a UUID or different format, return as-is
+            return hash_content
+
     def evaluate_retrieval(self, ground_truth: pd.DataFrame) -> Dict:
         """
         Evaluate retrieval quality against ground truth.
@@ -222,13 +239,16 @@ class RAGEvaluator:
                 found = False
                 rank = "n/a"
 
-                if str(expected_id) in [str(rid) for rid in retrieved_ids]:
+                # Convert expected_id to UUID if it's a hash
+                expected_id_uuid = self._hash_to_uuid(str(expected_id))
+
+                if expected_id_uuid in [str(rid) for rid in retrieved_ids]:
                     found = True
                     found_count += 1
                     # Find rank (1-indexed)
                     rank = next(
                         (idx + 1 for idx, rid in enumerate(retrieved_ids)
-                         if str(rid) == str(expected_id)),
+                         if str(rid) == expected_id_uuid),
                         "n/a"
                     )
 
