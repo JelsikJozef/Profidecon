@@ -29,7 +29,7 @@ def run_pipeline(input_dir: Path, output_dir: Path):
     docs = asyncio.run(ingest_batch(input_dir))
 
     registry    = ParserRegistry()
-    enricher    = Enricher(root_path=input_dir)
+    enricher    = Enricher(root_path=input_dir, llm_backend="ollama")
     deduplicator= Deduplicator()
     qc          = QualityChecker()
     serializer  = JsonlSerializer(output_dir=output_dir)
