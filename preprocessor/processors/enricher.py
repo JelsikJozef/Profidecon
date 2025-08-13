@@ -11,6 +11,7 @@ from collections import Counter
 from preprocessor.parsers.base import ParsedDocument
 from .normalizer import normalize
 from dotenv import load_dotenv
+from .llm_picker import LLMPicker
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -36,8 +37,9 @@ def pii_risk_score(text: str) -> float:
     return round((emails + phones) / max(total, 1), 4)
 
 class Enricher:
-    def __init__(self, root_path: Path):
+    def __init__(self, root_path: Path, llm_backend: str = "openai"):
         self.root = root_path
+        self.llm_picker = LLMPicker(backend=llm_backend)
 
     def enrich(self, doc: ParsedDocument) -> ParsedDocument:
         path = Path(doc.metadata.get("source", ""))
@@ -47,7 +49,7 @@ class Enricher:
 
         #1a) Generuje summary a tags cez LLM (ak je dostupné)
         logger.info(f"\tGenerating summary and tags for {path.name}")
-        summary, tags = generate_summary_and_tags(text)
+        summary, tags = self.llm_picker.generate_summary_and_tags(text)
 
         # 2) Základné súborové vlastnosti
         size = path.stat().st_size
@@ -90,46 +92,3 @@ class Enricher:
             text=text, summary=summary, tags=tags,
             metadata=new_meta
         )
-LLM_MODEL = "gpt-4o-mini"
-
-def generate_summary_and_tags(text: str) -> tuple[str, list[str]]:
-    """
-    Generuje súhrn a tagy pomocou LLM.
-    Tu by mal byť implementovaný volanie na OpenAI API alebo iný LLM.
-    """
-    try:
-       from openai import OpenAI
-       if not os.getenv("OPENAI_API_KEY"):
-           raise RuntimeError("OpenAI API key not found.")
-       client = OpenAI()
-       snippet = text[:1000]  # Prvých 1000 znakov textu
-       messages = [
-            {
-                "role": "system",
-                "content": "Summarize the provided text in Slovak and extract up to 5 short tags."
-                "Respond in Slovak with JSON using keys 'summary' and 'tags'.",
-            },
-            {"role": "user", "content": snippet},
-       ]
-       resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=messages,
-            max_tokens=500,
-            temperature=0.0,
-        )
-       if not resp or not resp.choices:
-            raise ValueError("No response from LLM.")
-       content = resp.choices[0].message.content.strip()
-       content = content.replace("```json", "").replace("```", "").strip()
-       data = json.loads(content)
-       summary = data.get("summary", "")
-       tags = data.get("tags", [])
-       if isinstance(tags, str):
-           tags = [t.strip() for t in tags.split(",") if t.strip()]
-       return summary, tags
-    except Exception:
-        # V prípade chyby v LLM, vrátime prázdne hodnoty
-        print("Error generating summary and tags")
-        return "", []
-
-
