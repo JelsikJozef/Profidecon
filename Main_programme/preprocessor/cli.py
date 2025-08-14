@@ -12,11 +12,17 @@ from Main_programme.preprocessor.parsers.registry import ParserRegistry
 from Main_programme.preprocessor.processors.normalizer import normalize
 from Main_programme.preprocessor.processors.ocr import needs_ocr, apply_ocr
 from Main_programme.preprocessor.processors.enricher import Enricher
+from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
 from Main_programme.preprocessor.processors.deduplicator import Deduplicator
 from Main_programme.preprocessor.processors.quality_checker import QualityChecker
 from Main_programme.preprocessor.processors.serializer import JsonlSerializer
 from Main_programme.preprocessor.taxonomy.extractor import TaxonomyExtractor
 from Main_programme.preprocessor.taxonomy.analyzer import main as analyze_taxonomy
+from Main_programme.preprocessor.processors.pseudonymizer import Pseudonymizer
+import json
+import os
+import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,7 @@ def run_pipeline(input_dir: Path, output_dir: Path):
 
     registry    = ParserRegistry()
     enricher    = Enricher(root_path=input_dir, llm_backend="ollama")
+    pii_analyzer = PiiAnalyzer()  # Initialize PII analyzer
     deduplicator= Deduplicator()
     qc          = QualityChecker()
     serializer  = JsonlSerializer(output_dir=output_dir)
@@ -57,18 +64,128 @@ def run_pipeline(input_dir: Path, output_dir: Path):
             logger.info("→ Enriching metadata")
             enriched = enricher.enrich(parsed)
 
-            # 5) Dedup
+            # 5) PII Analysis (Phase-1: detection only)
+            logger.info("→ Analyzing PII entities")
+            pii_entities = pii_analyzer.detect(enriched.text)
+
+            # Store PII entities in metadata for later use by pseudonymizer
+            enriched.metadata["pii_entities"] = [dict(entity) for entity in pii_entities]
+            enriched.metadata["pii_count"] = len(pii_entities)
+
+            if pii_entities:
+                entity_types = set(e["type"] for e in pii_entities)
+                logger.info(f"   Found {len(pii_entities)} PII entities: {', '.join(entity_types)}")
+
+            # 6) Dedup
             deduped = deduplicator.process(enriched)
 
-            # 6) Quality check
+            # 7) Quality check
             checked = qc.process(deduped)
 
-            # 7) Serialize
+            # 8) Serialize
             out_path = serializer.serialize(checked)
             logger.info(f"→ Wrote {out_path.name}")
 
         except Exception as e:
             logger.error(f"Chyba pri spracovaní {raw.path}: {e}")
+
+
+def run_pseudonymization(input_dir: Path, output_dir: Path, *, scope: str, tenant_id: str | None,
+                         types_include: list[str] | None, types_exclude: list[str] | None,
+                         max_entities: int | None, require_annotations: bool, force: bool):
+    logger.info(f"🔒 Pseudonymizing Phase-1 docs: {input_dir} → {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pseudo = Pseudonymizer(scope=scope, tenant_id=tenant_id)
+    analyzer = None if require_annotations else PiiAnalyzer()
+
+    def _sanitize_entities(ents: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for e in ents or []:
+            ed = dict(e)
+            if 'value' in ed:
+                ed['value'] = None
+            out.append(ed)
+        return out
+
+    processed = skipped = errors = 0
+    t0 = time.time()
+
+    for path in sorted(input_dir.glob('*.jsonl')):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8').splitlines()[0])
+        except Exception as e:
+            logger.error(f"Failed to read {path.name}: {e}")
+            errors += 1
+            continue
+
+        meta = data.get('metadata', {}) if isinstance(data.get('metadata'), dict) else {}
+        already = bool(meta.get('pseudonymized') or data.get('pseudonymized'))
+        if already and not force:
+            skipped += 1
+            continue
+
+        text = data.get('text') or ''
+        if not text:
+            skipped += 1
+            continue
+
+        ents = data.get('pii_entities') or meta.get('pii_entities')
+        if not ents:
+            if require_annotations:
+                logger.error(f"Missing pii_entities for {path.name} and require-annotations is True")
+                errors += 1
+                continue
+            else:
+                ents = analyzer.detect(text)
+
+        try:
+            res = pseudo.run(
+                text=text,
+                entities=ents,
+                types_include=types_include,
+                types_exclude=types_exclude,
+                max_entities=max_entities,
+            )
+        except Exception as e:
+            logger.error(f"Pseudonymization failed for {path.name}: {e}")
+            errors += 1
+            continue
+
+        out_doc = {}
+        for k, v in data.items():
+            if k in ('text', 'pii_entities'):
+                continue
+            out_doc[k] = v
+
+        out_meta = out_doc.get('metadata') if isinstance(out_doc.get('metadata'), dict) else {}
+        out_meta['pseudonymized'] = True
+        out_meta['pseudonymization'] = {
+            'scope': scope,
+            'tenant_id': tenant_id,
+            'counts': dict(res['stats'])
+        }
+        out_meta['token_spans'] = list(res['spans'])
+        out_meta['pii_entities'] = _sanitize_entities(ents)
+        out_doc['metadata'] = out_meta
+        out_doc['text_pseudo'] = res['text']
+
+        out_path = output_dir / path.name
+        try:
+            with out_path.open('w', encoding='utf-8') as f:
+                json.dump(out_doc, f, ensure_ascii=False)
+                f.write('\n')
+        except Exception as e:
+            logger.error(f"Failed to write {out_path.name}: {e}")
+            errors += 1
+            continue
+
+        processed += 1
+        logger.info(f"→ Wrote pseudonymized {out_path.name}")
+
+    dt_ms = int((time.time() - t0) * 1000)
+    logger.info(f"Pseudonymization done: processed={processed}, skipped={skipped}, errors={errors}, time_ms={dt_ms}")
+    if errors:
+        sys.exit(1)
 
 
 def main():
@@ -92,6 +209,18 @@ def main():
                        help="Path to directory with preprocessed JSONL files")
     p_ana.add_argument("--out", type=Path, default=Path("taxonomy.json"), help="Output taxonomy JSON file")
 
+    # pseudonymize command
+    p_pseudo = subparsers.add_parser("pseudonymize", help="Run Phase-2 pseudonymization on Phase-1 JSONL")
+    p_pseudo.add_argument("--input", "-i", type=Path, required=True, help="Input Phase-1 JSONL dir")
+    p_pseudo.add_argument("--output", "-o", type=Path, required=True, help="Output Phase-2 dir")
+    p_pseudo.add_argument("--scope", choices=["tenant", "global"], default=os.getenv("PSEUDO_SCOPE", "tenant"))
+    p_pseudo.add_argument("--tenant-id", default=os.getenv("PSEUDO_TENANT_ID"))
+    p_pseudo.add_argument("--types-include", default=os.getenv("PII_TYPES_INCLUDE"))
+    p_pseudo.add_argument("--types-exclude", default=os.getenv("PII_TYPES_EXCLUDE"))
+    p_pseudo.add_argument("--max-entities", type=int, default=int(os.getenv("PII_MAX_ENTITIES_PER_DOC", "0")))
+    p_pseudo.add_argument("--require-annotations", choices=["true", "false"], default=os.getenv("PSEUDONYMIZER_REQUIRE_ANNOTATIONS", "true"))
+    p_pseudo.add_argument("--force", action="store_true")
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -102,6 +231,21 @@ def main():
         files = (p for p in args.root.rglob("*.*") if p.is_file())
         ext.process_files(files)
     elif args.command == "taxonomy-analyze":
-        analyze_taxonomy(root=args.root, preprocessed_dir=args.preprocessed, out_tax=args.out)
+        analyze_taxonomy(preprocessed_dir=str(args.preprocessed), output_dir=str(args.out))
+    elif args.command == "pseudonymize":
+        inc = [t.strip() for t in args.types_include.split(',')] if args.types_include else None
+        exc = [t.strip() for t in args.types_exclude.split(',')] if args.types_exclude else None
+        max_e = args.max_entities if args.max_entities and args.max_entities > 0 else None
+        req = str(args.require_annotations).lower() == "true"
+        run_pseudonymization(
+            args.input, args.output,
+            scope=args.scope,
+            tenant_id=args.tenant_id,
+            types_include=inc,
+            types_exclude=exc,
+            max_entities=max_e,
+            require_annotations=req,
+            force=args.force,
+        )
 if __name__ == "__main__":
     main()
