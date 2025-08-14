@@ -1,4 +1,4 @@
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 from pathlib import Path
 import pytesseract
 from pdf2image import convert_from_path

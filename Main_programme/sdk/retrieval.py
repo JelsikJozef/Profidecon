@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import ScoredPoint, SearchParams
 from sentence_transformers import SentenceTransformer
 
-from vectorizer.settings import Settings
+from Main_programme.vectorizer.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class RetrievalEngine:
         Args:
             settings: Vectorizer settings (uses global settings if None)
         """
-        from vectorizer.settings import settings as default_settings
+        from Main_programme.vectorizer.settings import settings as default_settings
         self.settings = settings or default_settings
         self.client: Optional[QdrantClient] = None
         self.embedding_model: Optional[SentenceTransformer] = None

@@ -1,11 +1,9 @@
 # vectorizer/cli.py
 import click
 import json
-import settings
-from vectorizer.qdrant_client import ensure_collection
+from Main_programme.vectorizer.qdrant_client import ensure_collection
 import embedder
 import splitter
-import loader
 
 from pathlib import Path
 

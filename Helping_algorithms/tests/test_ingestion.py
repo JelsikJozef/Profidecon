@@ -1,8 +1,7 @@
 import pytest
-import asyncio
 from pathlib import Path
-from preprocessor.ingestion import ingest_batch
-from preprocessor.models import RawDocument
+from Main_programme.preprocessor import ingest_batch
+from Main_programme.preprocessor.models import RawDocument
 
 
 @pytest.mark.asyncio

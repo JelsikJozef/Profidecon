@@ -1,6 +1,6 @@
 import pytest
-from preprocessor.processors.quality_checker import QualityChecker
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.processors.quality_checker import QualityChecker
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 
 @pytest.fixture
 def small_doc():

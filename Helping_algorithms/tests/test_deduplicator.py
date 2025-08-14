@@ -1,5 +1,5 @@
-from preprocessor.processors.deduplicator import Deduplicator
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.processors import Deduplicator
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 
 def test_deduplication():
     dedup = Deduplicator()

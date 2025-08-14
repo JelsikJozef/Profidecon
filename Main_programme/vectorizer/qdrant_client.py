@@ -1,5 +1,5 @@
 from qdrant_client import QdrantClient, models
-import settings, hashlib
+import settings
 
 client = QdrantClient(url=settings.QDRANT_URL)
 

@@ -1,7 +1,6 @@
 import pytest
-from pathlib import Path
-from preprocessor.parsers.base import ParsedDocument
-from preprocessor.processors.enricher import Enricher
+from Main_programme.preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.processors.enricher import Enricher
 
 @pytest.fixture
 def sample_txt(tmp_path):

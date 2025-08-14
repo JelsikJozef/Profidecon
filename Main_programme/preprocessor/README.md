@@ -8,8 +8,9 @@ The `preprocessor` module provides a robust, extensible pipeline for document in
 
 ## Features
 
-- **Recursive Ingestion:** Scans directories for supported document types (`.pdf`, `.docx`, `.msg`).
+- **Recursive Ingestion:** Scans directories for supported document types (`.pdf`, `.docx`, `.msg`, `.jpg`, `.jpeg`, `.png`).
 - **Parsing:** Uses a registry of parsers for different file formats.
+- **Image OCR:** Multi-language OCR with automatic rotation correction for images.
 - **Normalization:** Cleans and standardizes parsed content.
 - **OCR:** Applies OCR to PDFs if required.
 - **Metadata Enrichment:** Adds additional metadata fields.
@@ -18,6 +19,141 @@ The `preprocessor` module provides a robust, extensible pipeline for document in
 - **Serialization:** Outputs processed documents as JSONL files.
 - **Taxonomy Extraction:** Uses LLMs (OpenAI) to extract structured metadata for taxonomy.
 - **Taxonomy Analysis:** Aggregates metadata into a hierarchical taxonomy.
+
+---
+
+## Image OCR Settings
+
+The Image Parser (`ImageParser`) provides advanced OCR capabilities for image files with automatic rotation correction and multi-language support.
+
+### Supported Formats
+- `.jpg`, `.jpeg`, `.png`
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OCR_LANGS` | `eng+slk+deu+ces+pol+spa+ita+fra+por+rus` | Languages for OCR (Tesseract format) |
+| `OCR_MAX_DIMENSION` | `2000` | Maximum dimension for image resizing before OCR |
+
+### Language Configuration
+
+#### Static Language Set
+```bash
+export OCR_LANGS="eng+slk+deu"  # English, Slovak, German
+```
+
+#### Automatic Language Detection
+```bash
+export OCR_LANGS="auto"  # Enables two-step OCR with language detection
+```
+
+When `OCR_LANGS="auto"` is set:
+1. **First pass**: OCR with conservative language set (`eng+slk`)
+2. **Language detection**: Analyze extracted text to identify language
+3. **Second pass**: OCR with extended language set based on detected language
+
+### Automatic Rotation Correction
+
+The Image Parser automatically corrects image orientation using:
+
+1. **EXIF metadata**: If available, applies EXIF orientation correction first
+2. **OSD (Orientation and Script Detection)**: If EXIF is unavailable, uses Tesseract OSD to detect rotation
+3. **Caching**: OSD results are cached during processing session for performance
+
+### Image Preprocessing
+
+Before OCR, images are automatically preprocessed to improve accuracy:
+- **Resizing**: Large images are scaled down (configurable via `OCR_MAX_DIMENSION`)
+- **Grayscale conversion**: Converts to grayscale for better OCR
+- **Contrast enhancement**: Increases contrast by 20%
+- **Binarization**: Converts to black and white using threshold
+
+### Metadata Fields
+
+The Image Parser adds the following metadata to processed documents:
+
+```json
+{
+  "source": "path/to/image.jpg",
+  "ocr": true,
+  "rotation_applied": 90,
+  "rotation_source": "osd",
+  "ocr_langs": ["eng+slk", "eng+slk+deu"],
+  "image_size": "1920x1080",
+  "image_mode": "RGB",
+  "ocr_empty": false
+}
+```
+
+### Tesseract Installation
+
+The Image Parser requires Tesseract OCR with language packs:
+
+#### Ubuntu/Debian
+```bash
+sudo apt-get update
+sudo apt-get install tesseract-ocr
+sudo apt-get install tesseract-ocr-slk tesseract-ocr-deu tesseract-ocr-ces tesseract-ocr-pol
+```
+
+#### macOS (Homebrew)
+```bash
+brew install tesseract
+brew install tesseract-lang
+```
+
+#### Windows
+1. Download Tesseract installer from: https://github.com/UB-Mannheim/tesseract/wiki
+2. Install with additional language packs
+3. Add Tesseract to PATH
+
+#### Available Language Codes
+- `eng` - English
+- `slk` - Slovak
+- `deu` - German
+- `ces` - Czech
+- `pol` - Polish
+- `spa` - Spanish
+- `ita` - Italian
+- `fra` - French
+- `por` - Portuguese
+- `rus` - Russian
+- `hun` - Hungarian
+- `ron` - Romanian
+- `ukr` - Ukrainian
+
+### Performance Optimization
+
+- **Image resizing**: Large images are automatically resized to improve processing speed
+- **OSD caching**: Rotation detection results are cached during processing session
+- **Fallback handling**: Multiple fallback levels ensure processing continues even if advanced features fail
+
+### Example Usage
+
+```bash
+# Process images with default settings
+python -m preprocessor.cli preprocess --input ./images --output ./processed
+
+# Process with custom language set
+export OCR_LANGS="eng+slk+deu"
+python -m preprocessor.cli preprocess --input ./images --output ./processed
+
+# Process with automatic language detection
+export OCR_LANGS="auto"
+python -m preprocessor.cli preprocess --input ./images --output ./processed
+
+# Process with custom image size limit
+export OCR_MAX_DIMENSION="1500"
+python -m preprocessor.cli preprocess --input ./images --output ./processed
+```
+
+### Troubleshooting
+
+**Empty OCR results**: Check that required Tesseract language packs are installed
+**Rotation issues**: Verify image EXIF data or try different preprocessing settings
+**Performance issues**: Reduce `OCR_MAX_DIMENSION` or limit language set
+**Language detection errors**: Use static language configuration instead of "auto" mode
 
 ---
 
@@ -131,7 +267,7 @@ Modul `enricher.py` využíva triedu `LLMPicker` (`llm_picker.py`) na generovani
 #### Príklad použitia:
 
 ```python
-from preprocessor.processors.enricher import Enricher
+from Main_programme.preprocessor.processors.enricher import Enricher
 
 # OpenAI backend (default)
 enricher = Enricher(root_path, llm_backend="openai")
@@ -143,7 +279,7 @@ enricher = Enricher(root_path, llm_backend="ollama")
 #### Priame použitie LLMPicker
 
 ```python
-from preprocessor.processors.llm_picker import LLMPicker
+from Main_programme.preprocessor.processors.llm_picker import LLMPicker
 
 llm = LLMPicker(backend="ollama")  # alebo "openai"
 summary, tags = llm.generate_summary_and_tags("Váš text...")
