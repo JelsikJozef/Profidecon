@@ -5,8 +5,8 @@ Profidecon je pokročilý systém pre spracovanie a vyhľadávanie právnych dok
 ## 🚀 Kľúčové funkcie
 
 - **Hybridné vyhľadávanie**: Dual vector embeddings (text + summary) s tag-based score boosting
-- **Pokročilé spracovanie**: OCR, normalizácia textu, deduplication a kvalitné kontroly
-- **Taxonómia dokumentov**: Automatická kategorizácia a extraktion tagov pomocou LLM
+- **Pokročilé spracovanie**: OCR (aj pre obrázky s auto-rotáciou), normalizácia textu, deduplikácia a kvalitné kontroly
+- **Taxonómia dokumentov**: Automatická kategorizácia a extrakcia tagov pomocou LLM
 - **RAG optimalizácia**: Optimalizované pre slovenčinu a právne dokumenty
 - **Vysoká presnosť**: 67% Recall@10 na testovacích dátach
 
@@ -17,7 +17,7 @@ Profidecon je pokročilý systém pre spracovanie a vyhľadávanie právnych dok
 git clone <repository-url>
 cd Profidecon
 
-# Inštalácia závislostí
+# Inštalácia v editable móde (z koreňa projektu)
 pip install -e .
 
 # Spustenie Qdrant servera
@@ -27,29 +27,29 @@ docker run -p 6333:6333 qdrant/qdrant
 ## 🛠️ Použitie
 
 ### CLI nástroj
-Po inštalácii máte k dispozícii `profidecon` CLI:
+Po inštalácii máte k dispozícii príkaz `profidecon`:
 
 ```bash
 profidecon --help
 ```
 
+- CLI entry point je v `Main_programme/profidecon/__main__.py`.
+- Všetky príkazy spúšťajte z koreňa projektu.
+
 ## 📋 Príklad workflow
 
 ### 1. Spracovanie dokumentov
 ```bash
-# Spracovanie dokumentov s OCR a normalizáciou
 profidecon preprocess --input ./Knowledge --output ./Preprocessed
 ```
 
 ### 2. Vytvorenie taxonómie
 ```bash
-# Analýza a vytvorenie taxonómie zo všetkých JSONL súborov
 profidecon taxonomy-analyze --input ./Preprocessed --output ./Taxonomy
 ```
 
 ### 3. Načítanie dual vectors do Qdrant
 ```bash
-# Vytvorenie embeddings pre text aj summary s dual vector support
 profidecon vector-load ./Preprocessed --glob "*.jsonl"
 ```
 
@@ -89,51 +89,28 @@ summary_results = engine.search_summary_vector(
 )
 ```
 
-## 🎯 Hybridné vyhľadávanie funkcie
+## 🖼️ Podpora OCR pre obrázky
 
-### Dual Vector Embeddings
-- **Body vectors**: Embeddings plného textu dokumentu
-- **Summary vectors**: Embeddings súhrnu dokumentu
-- Možnosť vyhľadávania v oboch typoch vektorov
-
-### Tag Boosting
-- Automatické zvýšenie skóre dokumentov s matching tagmi
-- Konfigurovateľný boost factor (default 20%)
-- Inteligentná re-ranking výsledkov
-
-### Konfigurácia vyhľadávania
-
-```python
-from Main_programme.vectorizer.settings import settings
-
-# Úprava globálnych nastavení
-settings.tag_boost = 0.30  # 30% boost
-settings.search_limit = 15  # 15 výsledkov
-settings.use_summary_vector = True  # Použiť summary vektor
-```
-
-## 📊 Výkonnosť systému
-
-Na testovacích dátach (33 ground truth queries):
-- **Recall@10: 66.7%** (22/33 správnych výsledkov)
-- **Tag boost efektívnosť: 36.4%** dotazov profituje z boostingu
-- **Dual vector podpora**: Seamless switching medzi text a summary embeddings
+- Preprocessor automaticky spracuje aj obrázky (`.jpg`, `.jpeg`, `.png`) s auto-rotáciou a multi-language OCR.
+- Viac info a konfigurácia: viď `Main_programme/preprocessor/README.md` sekcia "Image OCR".
 
 ## 🗂️ Štruktúra projektu
 
 ```
 Profidecon/
-├── preprocessor/        # Document processing pipeline
-│   ├── taxonomy/       # LLM-based taxonomy extraction
-│   └── processors/     # OCR, normalization, quality checks
-├── vectorizer/         # Dual vector embedding system  
-│   ├── embedder.py    # SentenceTransformer wrapper
-│   ├── loader.py      # Qdrant integration with dual vectors
-│   └── settings.py    # Configuration management
-├── sdk/               # Retrieval API
-│   └── retrieval.py   # Hybrid search engine
-├── tests/             # Test data and evaluation
-└── profidecon/        # Main CLI application
+├── Main_programme/
+│   ├── __init__.py
+│   ├── preprocessor/      # Document processing pipeline (OCR, normalization, taxonomy, atď.)
+│   ├── profidecon/        # Main CLI application (entry point)
+│   ├── sdk/               # Retrieval API (hybrid search)
+│   └── vectorizer/        # Dual vector embedding system, Qdrant integration
+├── Knowledge/             # Source documents
+├── Preprocessed/          # Output of preprocessing
+├── Sample/                # Sample data for testing
+├── Helping_algorithms/    # Test scripts, evaluation, debug tools
+├── pyproject.toml
+├── README.md
+└── ...
 ```
 
 ## 📚 Dokumentácia API
@@ -187,7 +164,7 @@ class SearchResult:
 
 ## ⚙️ Konfigurácia
 
-Systém používa `vectorizer/settings.py` pre konfiguráciu:
+Systém používa `Main_programme/vectorizer/settings.py` pre konfiguráciu:
 
 ```python
 # Embedding model
@@ -212,13 +189,13 @@ chunk_overlap = 100
 
 ```bash
 # Test hybridného vyhľadávania
-python test_hybrid_search.py
+python Helping_algorithms/tests/test_hybrid_search.py
 
 # Evaluácia na ground truth dátach
-python test_human_csv.py
+python Helping_algorithms/tests/test_human_csv.py
 
 # RAG pipeline evaluácia
-python evaluate_rag.py
+python Helping_algorithms/tests/evaluate_rag.py
 ```
 
 ## 📈 Metriky kvality

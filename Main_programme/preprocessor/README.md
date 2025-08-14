@@ -296,3 +296,289 @@ summary, tags = llm.generate_summary_and_tags("Váš text...")
 #### Poznámka
 
 Ak LLM nie je dostupné alebo dôjde k chybe, enrichment vráti prázdny summary a tagy.
+
+---
+
+## Enrichment Architecture
+
+The enrichment stage has been refactored into two specialized modules for better separation of concerns and maintainability:
+
+### Metadata Enricher (`enricher_metadata.py`)
+
+Handles **non-LLM enrichment tasks** that are fast, deterministic, and don't require network calls:
+
+- **Text Statistics**: Character count, word count, token estimation, sentence count, paragraph count
+- **Language Detection**: Automatic language identification using `langdetect`
+- **Content Analysis**: SHA-1 hashing for deduplication, PII risk scoring
+- **File Statistics**: File size, creation time, modification time
+- **Category Extraction**: Document categorization based on directory structure
+
+**Key Features:**
+- No LLM dependencies or network calls
+- Fast execution suitable for high-volume processing
+- Deterministic results for consistent metadata
+- Comprehensive text analysis metrics
+
+**Usage:**
+```python
+from Main_programme.preprocessor.processors.enricher_metadata import MetadataEnricher
+
+enricher = MetadataEnricher(root_path=Path("/path/to/documents"))
+enriched_doc = enricher.run(document_dict)
+
+# Or use stateless function
+from Main_programme.preprocessor.processors.enricher_metadata import run
+enriched_doc = run(document_dict, root_path=Path("/path/to/documents"))
+```
+
+### LLM Enricher (`enricher_llm.py`)
+
+Handles **AI-based enrichment tasks** that require language models:
+
+- **Summary Generation**: Creates concise document summaries
+- **Tag Extraction**: Identifies semantic tags and keywords
+- **Semantic Analysis**: Any other AI-powered content analysis
+
+**Key Features:**
+- Supports multiple LLM backends (OpenAI, Ollama, HuggingFace)
+- Robust error handling with graceful fallbacks
+- Configurable backend selection
+- Mock-friendly design for testing
+
+**Usage:**
+```python
+from Main_programme.preprocessor.processors.enricher_llm import LLMEnricher
+
+enricher = LLMEnricher(llm_backend="huggingface")
+enriched_doc = enricher.run(document_dict)
+
+# Or use stateless function
+from Main_programme.preprocessor.processors.enricher_llm import run
+enriched_doc = run(document_dict, llm_backend="openai")
+```
+
+### Unified Enricher (Backward Compatibility)
+
+The original `Enricher` class in `enricher.py` remains unchanged for backward compatibility. It now orchestrates both metadata and LLM enrichment internally:
+
+```python
+from Main_programme.preprocessor.processors.enricher import Enricher
+
+# Works exactly as before
+enricher = Enricher(root_path=input_dir, llm_backend="ollama")
+enriched_doc = enricher.enrich(parsed_document)
+```
+
+**Benefits of the Split:**
+- **Performance**: Metadata enrichment can run independently without LLM overhead
+- **Reliability**: Non-LLM tasks won't fail due to network issues or model unavailability
+- **Testing**: Each module can be tested in isolation with appropriate mocking
+- **Scalability**: Metadata processing can be parallelized more effectively
+- **Maintainability**: Clear separation of concerns makes code easier to understand and extend
+
+---
+
+## PII Analyzer
+
+The PII Analyzer provides robust, configurable detection of personally identifiable information (PII) with pluggable backends. It returns typed entities with character spans and confidence scores without altering the input text.
+
+### Supported Entity Types
+
+- **EMAIL**: Email addresses
+- **PHONE**: Phone numbers (international and local formats)
+- **PERSON_NAME**: Names with diacritics support (multilingual)
+- **IBAN**: International Bank Account Numbers
+- **PASSPORT**: Passport-like identifiers
+- **ID_NUMBER**: Generic ID patterns
+- **ADDRESS**: Address-like patterns
+- **CREDIT_CARD**: Credit card numbers
+- **DATE_OF_BIRTH**: Date patterns that might be birth dates
+- **URL**: Web URLs
+- **ORG**: Organizations (Presidio backend only)
+
+### Detection Backends
+
+#### Regex Backend (Default)
+- **No external dependencies**: Pure regex patterns
+- **Multilingual support**: Unicode-aware patterns with diacritics
+- **Performance optimized**: Pre-compiled patterns
+- **Context-aware scoring**: Business ID detection to reduce false positives
+- **Configurable confidence**: Pattern strength + length + context hints
+
+#### Presidio Backend (Optional)
+- **Microsoft Presidio integration**: Advanced NLP-based detection
+- **Graceful fallback**: Falls back to regex if Presidio unavailable
+- **Entity type mapping**: Maps Presidio types to canonical types
+- **Multi-language support**: Where supported by Presidio
+
+### Configuration
+
+Configure via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PII_BACKEND` | `regex` | Backend type (`regex` or `presidio`) |
+| `PII_LANGS` | `auto` | Language hints (`auto`, `en,sk,de,...`) |
+| `PII_RETURN_VALUES` | `true` | Include raw PII values in results |
+| `PII_MIN_CONFIDENCE` | `0.60` | Minimum confidence threshold |
+| `PII_TYPES_INCLUDE` | - | Comma-separated allowed types |
+| `PII_TYPES_EXCLUDE` | - | Comma-separated excluded types |
+| `PII_MAX_ENTITIES_PER_DOC` | `1000` | Safety limit per document |
+
+### Usage Examples
+
+#### Basic Detection
+```python
+from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
+
+analyzer = PiiAnalyzer()
+entities = analyzer.detect("Contact John at john@example.com or +1-555-123-4567")
+
+for entity in entities:
+    print(f"{entity['type']}: {entity['value']} (confidence: {entity['confidence']:.2f})")
+```
+
+#### Custom Configuration
+```python
+from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
+
+# High-security configuration
+analyzer = PiiAnalyzer(
+    backend="presidio",
+    min_confidence=0.80,
+    return_values=False,  # Don't include raw values
+    types_exclude={"DATE_OF_BIRTH", "URL"}
+)
+
+entities = analyzer.detect(text, locale="sk")
+```
+
+#### Environment Configuration
+```bash
+export PII_BACKEND=presidio
+export PII_MIN_CONFIDENCE=0.80
+export PII_TYPES_INCLUDE=EMAIL,PHONE,PERSON_NAME
+export PII_RETURN_VALUES=false
+
+# Then use with default configuration
+python -m preprocessor.cli preprocess --input ./docs --output ./processed
+```
+
+### Entity Structure
+
+Each detected entity includes:
+
+```python
+{
+    "type": "EMAIL",                    # Entity type
+    "start": 14,                       # Character start position
+    "end": 33,                         # Character end position
+    "value": "john@example.com",       # Raw value (optional)
+    "confidence": 0.95,               # Confidence score (0-1)
+    "pattern": "EMAIL",               # Pattern/rule identifier
+    "locale": "en"                    # Locale hint (optional)
+}
+```
+
+### Integration with Pipeline
+
+The PII analyzer is automatically integrated into the preprocessing pipeline:
+
+1. **Detection Phase**: Runs after metadata enrichment, before deduplication
+2. **Storage**: PII entities are stored in document metadata as `pii_entities`
+3. **Logging**: Entity counts and types are logged for monitoring
+4. **No Text Modification**: Original text remains unchanged (detection only)
+
+### Performance
+
+- **Regex Backend**: ≤200ms for 50KB documents
+- **Memory Efficient**: Streaming detection for large documents
+- **Deterministic**: Same input produces identical results
+- **Safe Limits**: Configurable entity count limits prevent memory issues
+
+### Overlap Resolution
+
+When multiple patterns match overlapping text regions:
+
+1. **Prefer Higher Confidence**: More confident matches take precedence
+2. **Prefer Specificity**: EMAIL > PHONE > PERSON_NAME > ID_NUMBER > URL
+3. **Deterministic Ordering**: Consistent results across runs
+
+### Multilingual Support
+
+- **Slovak**: Full diacritics support (á, č, ď, é, ě, í, ľ, ĺ, ň, ó, ô, ŕ, š, ť, ú, ů, ý, ž)
+- **German**: Umlauts and ß character support
+- **Czech**: Complete diacritics coverage
+- **English**: Standard ASCII and extended characters
+- **Context Aware**: Reduces false positives in business documents
+
+### Installation Requirements
+
+#### Regex Backend (Default)
+No additional dependencies required.
+
+#### Presidio Backend (Optional)
+```bash
+pip install presidio-analyzer presidio-anonymizer
+python -m spacy download en_core_web_sm
+```
+
+### Testing
+
+Comprehensive test coverage includes:
+- Multi-language detection accuracy
+- Performance benchmarks
+- Edge case handling
+- Configuration validation
+- Backend parity testing
+
+```bash
+python -m pytest Helping_algorithms/tests/test_pii_analyzer.py -v
+```
+
+---
+
+## Phase-2: Pseudonymization
+
+Deterministic, reversible pseudonymization replaces PII spans with typed display tokens (e.g., [EMAIL:K7V2WQ3M]) using the Token Vault. Plaintext PII is never written to Phase‑2 outputs.
+
+Key properties:
+- Deterministic for identical (value, type, scope, tenant_id)
+- Overlap-safe (prefers longer spans; applied with stable indices)
+- Unicode-safe (uses Python codepoint indices)
+- No plaintext leakage in logs or outputs (only token IDs and counts)
+
+Environment:
+- PSEUDO_SCOPE=tenant|global (default: tenant)
+- PSEUDONYMIZER_REQUIRE_ANNOTATIONS=true|false (default: true)
+- PII_TYPES_INCLUDE, PII_TYPES_EXCLUDE (comma-separated)
+- PII_MAX_ENTITIES_PER_DOC (caps unique values per doc)
+- Token Vault env from Prompt #4 (DATABASE_URL, HMAC/KEK/SALT, TOKEN_ID_BYTES)
+
+CLI usage (Click, recommended):
+- profidecon pseudonymize \
+  --input <phase1_dir> \
+  --output <phase2_dir> \
+  --scope tenant|global \
+  --tenant-id <id> \
+  [--types-include EMAIL,PHONE] \
+  [--types-exclude URL] \
+  [--max-entities 500] \
+  [--require-annotations true|false] \
+  [--force]
+
+Legacy CLI (argparse):
+- python -m Main_programme.preprocessor.cli pseudonymize \
+  --input <phase1_dir> --output <phase2_dir> [same flags]
+
+Phase‑2 output fields:
+- text_pseudo: pseudonymized text
+- metadata.pseudonymized: true
+- metadata.pseudonymization: { scope, tenant_id, counts }
+- metadata.token_spans: list of TokenSpan mappings
+- metadata.pii_entities: original spans with value removed (None)
+
+Notes:
+- Idempotent: already pseudonymized docs are skipped unless --force
+- On missing annotations and --require-annotations=false, PII detection is run on the fly
+- Fail-fast on vault errors with non-zero exit code

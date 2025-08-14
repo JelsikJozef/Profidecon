@@ -14,6 +14,7 @@ It serves as a unified interface for various document processing tasks, includin
 import click
 import logging
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,10 @@ from Main_programme.preprocessor.cli import run_pipeline
 from Main_programme.preprocessor.taxonomy.extractor import TaxonomyExtractor
 from Main_programme.preprocessor.taxonomy.analyzer import main as analyze_taxonomy
 from Main_programme.vectorizer import load_folder
+from Main_programme.preprocessor.processors.pseudonymizer import Pseudonymizer
+from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
+import json
+import time
 
 
 # Global options that apply to all commands
@@ -141,7 +146,7 @@ def taxonomy_analyze(ctx, root: Path, preprocessed: Path, out: Path):
     logger.info(f"Starting taxonomy analysis from: {preprocessed}")
 
     try:
-        analyze_taxonomy(root=root, preprocessed_dir=preprocessed, out_tax=out)
+        analyze_taxonomy(preprocessed_dir=str(preprocessed), output_dir=str(out))
 
         logger.info(f"✅ Taxonomy analysis completed: {out}")
 
@@ -176,6 +181,143 @@ def vector_load(ctx, input_dir: Path, glob: str):
         logger.error(f"❌ Vector loading failed: {e}")
         if ctx.obj.get('verbose'):
             logger.exception("Full traceback:")
+        sys.exit(1)
+
+
+@profidecon.command('pseudonymize')
+@click.option('--input', '-i', type=click.Path(exists=True, file_okay=False, path_type=Path), required=True,
+              help='Input folder with Phase-1 JSONL files')
+@click.option('--output', '-o', type=click.Path(file_okay=False, path_type=Path), required=True,
+              help='Output folder for Phase-2 pseudonymized JSONL files')
+@click.option('--scope', type=click.Choice(['tenant', 'global']), default=lambda: os.getenv('PSEUDO_SCOPE', 'tenant'),
+              show_default=True, help='Token scope')
+@click.option('--tenant-id', type=str, default=lambda: os.getenv('PSEUDO_TENANT_ID', None), help='Tenant identifier')
+@click.option('--types-include', type=str, default=os.getenv('PII_TYPES_INCLUDE', None),
+              help='Comma-separated PII types to include')
+@click.option('--types-exclude', type=str, default=os.getenv('PII_TYPES_EXCLUDE', None),
+              help='Comma-separated PII types to exclude')
+@click.option('--max-entities', type=int, default=lambda: int(os.getenv('PII_MAX_ENTITIES_PER_DOC', '0')),
+              help='Maximum entities per document (0 means no limit)')
+@click.option('--require-annotations', type=bool, default=lambda: os.getenv('PSEUDONYMIZER_REQUIRE_ANNOTATIONS', 'true').lower() == 'true',
+              help='Require Phase-1 PII annotations; otherwise detect on the fly')
+@click.option('--force', is_flag=True, help='Re-run even if already pseudonymized')
+@click.pass_context
+def pseudonymize(ctx, input: Path, output: Path, scope: str, tenant_id: Optional[str], types_include: Optional[str],
+                 types_exclude: Optional[str], max_entities: int, require_annotations: bool, force: bool):
+    """Phase-2: Pseudonymize Phase-1 docs using Token Vault without storing plaintext."""
+    logger = logging.getLogger(__name__)
+    start_ts = time.time()
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Prepare filters
+    include_list = [t.strip() for t in types_include.split(',')] if types_include else None
+    exclude_list = [t.strip() for t in types_exclude.split(',')] if types_exclude else None
+    max_entities_val = max_entities if max_entities and max_entities > 0 else None
+
+    # Init processors
+    pseudo = Pseudonymizer(scope=scope, tenant_id=tenant_id)
+    analyzer = None if require_annotations else PiiAnalyzer()
+
+    errors = 0
+    processed = 0
+    skipped = 0
+
+    def _sanitize_entities(ents: list[dict]) -> list[dict]:
+        safe: list[dict] = []
+        for e in ents or []:
+            ee = dict(e)
+            if 'value' in ee:
+                ee['value'] = None
+            safe.append({k: ee[k] for k in ee.keys()})
+        return safe
+
+    for path in sorted(input.glob('*.jsonl')):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8').splitlines()[0])
+        except Exception as e:
+            logger.error(f"Failed to read {path.name}: {e}")
+            errors += 1
+            continue
+
+        meta = data.get('metadata', {}) if isinstance(data.get('metadata'), dict) else {}
+        already = bool(meta.get('pseudonymized') or data.get('pseudonymized'))
+        if already and not force:
+            skipped += 1
+            continue
+
+        text = data.get('text') or ''
+        if not text:
+            logger.info(f"Skipping empty text in {path.name}")
+            skipped += 1
+            continue
+
+        # Load entities from Phase-1 if present
+        ents = data.get('pii_entities') or meta.get('pii_entities')
+        if not ents:
+            if require_annotations:
+                logger.error(f"Missing pii_entities for {path.name} and require-annotations is True")
+                errors += 1
+                continue
+            else:
+                # Detect on the fly
+                ents = analyzer.detect(text)
+
+        try:
+            result = pseudo.run(
+                text=text,
+                entities=ents,
+                types_include=include_list,
+                types_exclude=exclude_list,
+                max_entities=max_entities_val,
+            )
+        except Exception as e:
+            logger.error(f"Pseudonymization failed for {path.name}: {e}")
+            errors += 1
+            continue
+
+        # Build output document without plaintext PII
+        out_doc = {}
+        # Keep non-sensitive top-level fields except original text
+        for k, v in data.items():
+            if k == 'text':
+                continue
+            if k == 'pii_entities':
+                continue
+            out_doc[k] = v
+
+        # Ensure metadata exists
+        out_meta = out_doc.get('metadata') if isinstance(out_doc.get('metadata'), dict) else {}
+        out_meta['pseudonymized'] = True
+        out_meta['pseudonymization'] = {
+            'scope': scope,
+            'tenant_id': tenant_id,
+            'counts': dict(result['stats'])
+        }
+        out_meta['token_spans'] = list(result['spans'])
+        out_meta['pii_entities'] = _sanitize_entities(ents)
+        out_doc['metadata'] = out_meta
+
+        # Pseudonymized text payload
+        out_doc['text_pseudo'] = result['text']
+
+        # Persist with same filename
+        out_path = output / path.name
+        try:
+            with out_path.open('w', encoding='utf-8') as f:
+                json.dump(out_doc, f, ensure_ascii=False)
+                f.write('\n')
+        except Exception as e:
+            logger.error(f"Failed to write {out_path.name}: {e}")
+            errors += 1
+            continue
+
+        processed += 1
+        logger.info(f"Pseudonymized {path.name} (entities: {sum(result['stats'].values())})")
+
+    dt = (time.time() - start_ts) * 1000.0
+    logger.info(f"Phase-2 pseudonymization completed: processed={processed}, skipped={skipped}, errors={errors}, time_ms={int(dt)}")
+
+    if errors > 0:
         sys.exit(1)
 
 
