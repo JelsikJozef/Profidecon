@@ -1,5 +1,5 @@
-from preprocessor.parsers.registry import ParserRegistry
-from pathlib import Path
+from Main_programme.preprocessor.parsers.registry import ParserRegistry
+
 
 def test_get_parser_docx():
     reg = ParserRegistry()

@@ -5,19 +5,18 @@ Main CLI for Document Preprocessor including Taxonomy modules
 import argparse
 import logging
 import asyncio
-import time
 from pathlib import Path
 
-from preprocessor.ingestion import ingest_batch
-from preprocessor.parsers.registry import ParserRegistry
-from preprocessor.processors.normalizer import normalize
-from preprocessor.processors.ocr import needs_ocr, apply_ocr
-from preprocessor.processors.enricher import Enricher
-from preprocessor.processors.deduplicator import Deduplicator
-from preprocessor.processors.quality_checker import QualityChecker
-from preprocessor.processors.serializer import JsonlSerializer
-from preprocessor.taxonomy.extractor import TaxonomyExtractor
-from preprocessor.taxonomy.analyzer import main as analyze_taxonomy
+from Main_programme.preprocessor.ingestion import ingest_batch
+from Main_programme.preprocessor.parsers.registry import ParserRegistry
+from Main_programme.preprocessor.processors.normalizer import normalize
+from Main_programme.preprocessor.processors.ocr import needs_ocr, apply_ocr
+from Main_programme.preprocessor.processors.enricher import Enricher
+from Main_programme.preprocessor.processors.deduplicator import Deduplicator
+from Main_programme.preprocessor.processors.quality_checker import QualityChecker
+from Main_programme.preprocessor.processors.serializer import JsonlSerializer
+from Main_programme.preprocessor.taxonomy.extractor import TaxonomyExtractor
+from Main_programme.preprocessor.taxonomy.analyzer import main as analyze_taxonomy
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,6 @@
-from pathlib import Path
 import json
-import pytest
-from preprocessor.processors.serializer import JsonlSerializer
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.processors import JsonlSerializer
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 
 def test_serialization_with_optional_fields(tmp_path):
     meta = {"hash_sha1": "abc123"}

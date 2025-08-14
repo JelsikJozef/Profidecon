@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 
 def normalize(doc: ParsedDocument) -> ParsedDocument:
     text = doc.text

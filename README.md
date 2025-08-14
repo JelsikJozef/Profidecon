@@ -56,7 +56,7 @@ profidecon vector-load ./Preprocessed --glob "*.jsonl"
 ### 4. Hybridné vyhľadávanie
 
 ```python
-from sdk.retrieval import RetrievalEngine
+from Main_programme.sdk.retrieval import RetrievalEngine
 
 # Inicializácia retrieval engine
 engine = RetrievalEngine()
@@ -102,12 +102,13 @@ summary_results = engine.search_summary_vector(
 - Inteligentná re-ranking výsledkov
 
 ### Konfigurácia vyhľadávania
+
 ```python
-from vectorizer.settings import settings
+from Main_programme.vectorizer.settings import settings
 
 # Úprava globálnych nastavení
-settings.tag_boost = 0.30        # 30% boost
-settings.search_limit = 15       # 15 výsledkov
+settings.tag_boost = 0.30  # 30% boost
+settings.search_limit = 15  # 15 výsledkov
 settings.use_summary_vector = True  # Použiť summary vektor
 ```
 
@@ -140,7 +141,7 @@ Profidecon/
 ### RetrievalEngine
 
 ```python
-from sdk.retrieval import RetrievalEngine
+from Main_programme.sdk.retrieval import RetrievalEngine
 
 engine = RetrievalEngine()
 
@@ -231,8 +232,9 @@ Systém poskytuje kompletnú evaluáciu:
 ## 🔧 Pokročilé použitie
 
 ### Custom embedding models
+
 ```python
-from vectorizer.settings import Settings
+from Main_programme.vectorizer.settings import Settings
 
 settings = Settings(embed_model="your-custom-model")
 engine = RetrievalEngine(settings)

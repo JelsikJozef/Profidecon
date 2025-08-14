@@ -1,14 +1,8 @@
 import hashlib
 from pathlib import Path
-from pyexpat.errors import messages
 
-from langdetect import detect
-import json
-import os
-import re
 import logging
-from collections import Counter
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 from .normalizer import normalize
 from dotenv import load_dotenv
 from .llm_picker import LLMPicker
@@ -39,7 +33,7 @@ def pii_risk_score(text: str) -> float:
 class Enricher:
     def __init__(self, root_path: Path, llm_backend: str = "openai"):
         self.root = root_path
-        self.llm_picker = LLMPicker(backend=llm_backend)
+        self.llm_picker = LLMPicker(backend="huggingface")
 
     def enrich(self, doc: ParsedDocument) -> ParsedDocument:
         path = Path(doc.metadata.get("source", ""))

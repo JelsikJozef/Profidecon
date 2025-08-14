@@ -2,6 +2,7 @@ from .base import BaseParser
 from .docx_parser import DocxParser
 from .pdf_parser import PdfParser
 from .msg_parser import MsgParser
+from .image_parser import ImageParser
 
 class ParserRegistry:
     def __init__(self):
@@ -9,6 +10,7 @@ class ParserRegistry:
             DocxParser(),
             PdfParser(),
             MsgParser(),
+            ImageParser(),
         ]
 
     def get_parser(self, suffix: str) -> BaseParser:

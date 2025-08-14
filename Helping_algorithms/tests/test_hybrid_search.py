@@ -4,7 +4,7 @@ Test script for the new hybrid retrieval system with dual vectors and tag boosti
 """
 
 import logging
-from sdk.retrieval import RetrievalEngine
+from Main_programme.sdk.retrieval import RetrievalEngine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

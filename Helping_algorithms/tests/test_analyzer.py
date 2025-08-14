@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import pytest
-from preprocessor.taxonomy.analyzer import (
+from Main_programme.preprocessor.taxonomy.analyzer import (
     load_raw_metadata,
     build_tag_corpus,
     cluster_tags,

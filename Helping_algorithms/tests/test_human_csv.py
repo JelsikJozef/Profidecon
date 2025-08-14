@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
-from sdk.retrieval import RetrievalEngine
+from Main_programme.sdk.retrieval import RetrievalEngine
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')

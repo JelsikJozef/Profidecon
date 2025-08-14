@@ -1,4 +1,4 @@
-from preprocessor.parsers.base import ParsedDocument
+from Main_programme.preprocessor.parsers.base import ParsedDocument
 
 class QualityChecker:
     """

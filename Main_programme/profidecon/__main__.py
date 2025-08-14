@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Optional
 
 # Import existing CLI functions
-from preprocessor.cli import run_pipeline
-from preprocessor.taxonomy.extractor import TaxonomyExtractor
-from preprocessor.taxonomy.analyzer import main as analyze_taxonomy
-from vectorizer import load_folder
+from Main_programme.preprocessor.cli import run_pipeline
+from Main_programme.preprocessor.taxonomy.extractor import TaxonomyExtractor
+from Main_programme.preprocessor.taxonomy.analyzer import main as analyze_taxonomy
+from Main_programme.vectorizer import load_folder
 
 
 # Global options that apply to all commands
@@ -123,7 +123,7 @@ def taxonomy_extract(ctx, root: Path, out: Path):
 @profidecon.command('taxonomy-analyze')
 @click.argument('root', type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option('--preprocessed', type=click.Path(exists=True, file_okay=False, path_type=Path),
-              default=Path("../Preprocessed"), help='Path to directory with preprocessed JSONL files')
+              default=Path("../../Preprocessed"), help='Path to directory with preprocessed JSONL files')
 @click.option('--out', type=click.Path(path_type=Path), default=Path("taxonomy.json"),
               help='Output taxonomy JSON file')
 @click.pass_context
@@ -192,7 +192,7 @@ def version(ctx):
 @click.option('--input', '-i', type=click.Path(exists=True, file_okay=False, path_type=Path),
               required=True, help='Input folder with documents')
 @click.option('--preprocessed', type=click.Path(file_okay=False, path_type=Path),
-              default=Path("../Preprocessed"), help='Preprocessed output folder')
+              default=Path("../../Preprocessed"), help='Preprocessed output folder')
 @click.option('--taxonomy-out', type=click.Path(path_type=Path),
               default=Path("taxonomy.json"), help='Taxonomy output file')
 @click.option('--skip-vectors', is_flag=True, help='Skip vector loading step')
