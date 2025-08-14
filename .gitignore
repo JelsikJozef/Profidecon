@@ -11,6 +11,9 @@ __pycache__/
 .vscode/
 .DS_Store
 .env
-Thumbs.db
+.Knowledge/
+
 # Ignore entire Knowledge folder
 Knowledge/
+Preprocessed/
+Sample/
