@@ -6,6 +6,7 @@ from typing import TypedDict, List, Dict, Optional, Tuple
 
 from Main_programme.preprocessor.processors.pii_analyzer import PiiEntity
 from Main_programme.preprocessor.token_vault.service import get_vault_from_env
+from Main_programme.preprocessor.observability.metrics import pii_tokens_total
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,10 @@ class Pseudonymizer:
                 token_end=token_end,
             ))
             counts[pii_type] = counts.get(pii_type, 0) + 1
+            try:
+                pii_tokens_total.labels(type=pii_type).inc()
+            except Exception:
+                pass
             curr = end
 
         # Append the remaining tail

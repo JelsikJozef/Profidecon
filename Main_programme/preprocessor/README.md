@@ -6,6 +6,49 @@ The `preprocessor` module provides a robust, extensible pipeline for document in
 
 ---
 
+## Quickstart: Run the Whole Pipeline
+
+Use these commands to process documents end-to-end. Adjust paths as needed.
+
+```bash
+# Phase-1: Preprocess raw documents into JSONL
+profidecon preprocess --input ./Knowledge --output ./Preprocessed
+
+# Phase-2: Pseudonymize (replace PII with tokens)
+profidecon pseudonymize \
+  --input ./Preprocessed \
+  --output ./Preprocessed_Phase2 \
+  --scope tenant \
+  --tenant-id default-tenant
+
+# Phase-3: LLM enrichment on pseudonymized text (no plaintext PII)
+profidecon enrich-llm \
+  --input ./Preprocessed_Phase2 \
+  --output ./Preprocessed_Phase3 \
+  --model gpt-4o-mini
+
+# Optional: Taxonomy
+profidecon taxonomy-extract ./Knowledge --out metadata_raw.jsonl
+profidecon taxonomy-analyze ./Knowledge --preprocessed ./Preprocessed --out taxonomy.json
+```
+
+One-shot full pipeline:
+
+```bash
+profidecon full-pipeline \
+  --input ./Knowledge \
+  --preprocessed ./Preprocessed \
+  --taxonomy-out ./taxonomy.json
+```
+
+Note: If you prefer direct Python module calls, use the correct module path:
+
+```bash
+python -m Main_programme.preprocessor.cli preprocess --input ./Knowledge --output ./Preprocessed
+```
+
+---
+
 ## Features
 
 - **Recursive Ingestion:** Scans directories for supported document types (`.pdf`, `.docx`, `.msg`, `.jpg`, `.jpeg`, `.png`).
@@ -133,19 +176,19 @@ brew install tesseract-lang
 
 ```bash
 # Process images with default settings
-python -m preprocessor.cli preprocess --input ./images --output ./processed
+profidecon preprocess --input ./images --output ./processed
 
 # Process with custom language set
 export OCR_LANGS="eng+slk+deu"
-python -m preprocessor.cli preprocess --input ./images --output ./processed
+profidecon preprocess --input ./images --output ./processed
 
 # Process with automatic language detection
 export OCR_LANGS="auto"
-python -m preprocessor.cli preprocess --input ./images --output ./processed
+profidecon preprocess --input ./images --output ./processed
 
 # Process with custom image size limit
 export OCR_MAX_DIMENSION="1500"
-python -m preprocessor.cli preprocess --input ./images --output ./processed
+profidecon preprocess --input ./images --output ./processed
 ```
 
 ### Troubleshooting
@@ -159,10 +202,16 @@ python -m preprocessor.cli preprocess --input ./images --output ./processed
 
 ## CLI Usage
 
-Run the CLI from the project root or the `preprocessor` directory:
+Run the CLI via the installed command `profidecon`:
 
 ```
-python -m preprocessor.cli <command> [options]
+profidecon <command> [options]
+```
+
+Or directly via Python module (advanced):
+
+```
+python -m Main_programme.preprocessor.cli <command> [options]
 ```
 
 ### Commands
@@ -182,6 +231,27 @@ python -m preprocessor.cli <command> [options]
   - `<root>`: Root folder path
   - `--preprocessed <dir>`: Directory with preprocessed JSONL files (default: `Preprocessed`)
   - `--out <file>`: Output taxonomy JSON file (default: `taxonomy.json`)
+
+- `pseudonymize`  
+  Run Phase‑2 pseudonymization over Phase‑1 JSONL outputs.
+  - `--input/-i <dir>`: Phase‑1 JSONL directory
+  - `--output/-o <dir>`: Output directory for Phase‑2
+  - `--scope tenant|global` (env: `PSEUDO_SCOPE`)
+  - `--tenant-id <id>` (env: `PSEUDO_TENANT_ID`)
+  - `--types-include`, `--types-exclude`, `--max-entities`, `--require-annotations`, `--force`
+
+- `enrich-llm`  
+  Phase‑3: LLM enrichment on Phase‑2 JSONL (`text_pseudo`).
+  - `--input/-i <dir>`: Phase‑2 directory
+  - `--output/-o <dir>`: Output directory for Phase‑3
+  - `--model <id>`: LLM model id (required)
+
+- `full-pipeline`  
+  Convenience command that runs preprocess → taxonomy-analyze → vector-load.
+  - `--input/-i <dir>`: Source documents folder
+  - `--preprocessed <dir>`: Output folder for Phase‑1
+  - `--taxonomy-out <file>`: Taxonomy JSON path
+  - `--skip-vectors`: Skip vector loading step
 
 ---
 
@@ -233,9 +303,9 @@ python -m preprocessor.cli <command> [options]
 ## Example
 
 ```
-python -m preprocessor.cli preprocess --input ./Knowledge --output ./Preprocessed
-python -m preprocessor.cli taxonomy-extract ./Knowledge --out metadata_raw.jsonl
-python -m preprocessor.cli taxonomy-analyze ./Knowledge --preprocessed ./Preprocessed --out taxonomy.json
+profidecon preprocess --input ./Knowledge --output ./Preprocessed
+profidecon taxonomy-extract ./Knowledge --out metadata_raw.jsonl
+profidecon taxonomy-analyze ./Knowledge --preprocessed ./Preprocessed --out taxonomy.json
 ```
 
 ---
@@ -410,6 +480,7 @@ The PII Analyzer provides robust, configurable detection of personally identifia
 - **Graceful fallback**: Falls back to regex if Presidio unavailable
 - **Entity type mapping**: Maps Presidio types to canonical types
 - **Multi-language support**: Where supported by Presidio
+- **spaCy NLP engine (optional)**: Configure via `PRESIDIO_SPACY_MODELS`
 
 ### Configuration
 
@@ -417,13 +488,14 @@ Configure via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PII_BACKEND` | `regex` | Backend type (`regex` or `presidio`) |
+| `PII_BACKEND` | `regex` | Backend type (`regex`, `presidio`, or `auto`) |
 | `PII_LANGS` | `auto` | Language hints (`auto`, `en,sk,de,...`) |
 | `PII_RETURN_VALUES` | `true` | Include raw PII values in results |
 | `PII_MIN_CONFIDENCE` | `0.60` | Minimum confidence threshold |
 | `PII_TYPES_INCLUDE` | - | Comma-separated allowed types |
 | `PII_TYPES_EXCLUDE` | - | Comma-separated excluded types |
 | `PII_MAX_ENTITIES_PER_DOC` | `1000` | Safety limit per document |
+| `PRESIDIO_SPACY_MODELS` | - | Optional map `lang:model` pairs, e.g. `en:en_core_web_lg,de:de_core_news_md` |
 
 ### Usage Examples
 
@@ -436,6 +508,23 @@ entities = analyzer.detect("Contact John at john@example.com or +1-555-123-4567"
 
 for entity in entities:
     print(f"{entity['type']}: {entity['value']} (confidence: {entity['confidence']:.2f})")
+```
+
+#### Enable Presidio (preferred when available)
+```bash
+pip install presidio-analyzer spacy
+python -m spacy download en_core_web_lg
+python -m spacy download de_core_news_md
+
+export PII_BACKEND=auto
+export PRESIDIO_SPACY_MODELS="en:en_core_web_lg,de:de_core_news_md"
+```
+
+```python
+from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
+
+analyzer = PiiAnalyzer(backend="auto")   # or backend="presidio"
+entities = analyzer.detect(text, locale="de")
 ```
 
 #### Custom Configuration
@@ -519,11 +608,15 @@ No additional dependencies required.
 
 #### Presidio Backend (Optional)
 ```bash
-pip install presidio-analyzer presidio-anonymizer
-python -m spacy download en_core_web_sm
+pip install presidio-analyzer spacy
+python -m spacy download en_core_web_lg
+# Add other models as needed, e.g. German
+python -m spacy download de_core_news_md
 ```
 
-### Testing
+---
+
+## Testing
 
 Comprehensive test coverage includes:
 - Multi-language detection accuracy

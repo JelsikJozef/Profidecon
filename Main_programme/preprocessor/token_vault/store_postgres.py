@@ -23,6 +23,9 @@ from .errors import (
 
 logger = logging.getLogger(__name__)
 
+# Global cache for SQLite connections keyed by db_url
+_SQLITE_CONNS: dict[str, Any] = {}
+
 class PostgresTokenVault:
     """PostgreSQL implementation of TokenVault."""
 
@@ -51,10 +54,28 @@ class PostgresTokenVault:
             # For testing with SQLite
             if self.db_url.startswith("sqlite://"):
                 import sqlite3
-                if self._connection is None:
-                    self._connection = sqlite3.connect(":memory:", check_same_thread=False)
-                    self._connection.row_factory = sqlite3.Row
-                return self._connection
+                # Normalize key; support in-memory shared db
+                key = self.db_url
+                conn = _SQLITE_CONNS.get(key)
+                if conn is None:
+                    # Use a shared in-memory database if :memory: requested
+                    if self.db_url.endswith(":memory:"):
+                        uri = "file:token_vault_shared?mode=memory&cache=shared"
+                        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+                    else:
+                        # sqlite:///path or other forms
+                        path = self.db_url.replace("sqlite://", "", 1)
+                        if not path or path == "/":
+                            # Fallback to shared memory
+                            uri = "file:token_vault_shared?mode=memory&cache=shared"
+                            conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+                        else:
+                            # Strip leading slash for absolute paths if needed
+                            db_path = path
+                            conn = sqlite3.connect(db_path, check_same_thread=False)
+                    conn.row_factory = sqlite3.Row
+                    _SQLITE_CONNS[key] = conn
+                return conn
             else:
                 # PostgreSQL
                 import psycopg2
@@ -97,7 +118,7 @@ class PostgresTokenVault:
             """)
 
             conn.commit()
-            logger.info("Database schema initialized successfully")
+            logger.debug("Database schema initialized successfully")
 
         except Exception as e:
             raise VaultError(f"Failed to initialize database schema: {e}")
@@ -134,6 +155,7 @@ class PostgresTokenVault:
             if existing:
                 # Token already exists
                 logger.debug(f"Returning existing token {token_id}")
+                logging.getLogger("vault.audit").warning("vault_audit op=create decision=allow token_type=%s token_id=%s tenant_id=%s", type, token_id, tenant_id)
                 return Token(id=token_id, type=type, display=display)
 
             # Create new token
@@ -154,10 +176,12 @@ class PostgresTokenVault:
             else:
                 logger.debug(f"Token {token_id} already existed (race condition)")
 
+            logging.getLogger("vault.audit").warning("vault_audit op=create decision=allow token_type=%s token_id=%s tenant_id=%s", type, token_id, tenant_id)
             return Token(id=token_id, type=type, display=display)
 
         except Exception as e:
             logger.error(f"Failed to create/retrieve token: {e}")
+            logging.getLogger("vault.audit").warning("vault_audit op=create decision=deny error=%s token_type=%s tenant_id=%s", type(e).__name__, type, tenant_id)
             raise VaultError(f"Token operation failed: {e}")
 
     def resolve(self, *, token_id: str, scope: Scope,
@@ -167,6 +191,7 @@ class PostgresTokenVault:
         """
         # Check resolve permissions
         if not check_resolve_permission(token_id, tenant_id, self.actor_ctx):
+            logging.getLogger("vault.audit").warning("vault_audit op=resolve decision=deny token_id=%s tenant_id=%s", token_id, tenant_id)
             raise PermissionError(f"Access denied for resolving token {token_id}")
 
         try:
@@ -181,6 +206,7 @@ class PostgresTokenVault:
 
             record = cur.fetchone()
             if not record:
+                logging.getLogger("vault.audit").warning("vault_audit op=resolve decision=deny error=NotFound token_id=%s tenant_id=%s", token_id, tenant_id)
                 raise NotFoundError(f"Token {token_id} not found in scope {scope}")
 
             # Decrypt the value
@@ -193,15 +219,18 @@ class PostgresTokenVault:
                 )
 
                 logger.debug(f"Successfully resolved token {token_id}")
+                logging.getLogger("vault.audit").warning("vault_audit op=resolve decision=allow token_type=%s token_id=%s tenant_id=%s", record['type'], token_id, tenant_id)
                 return plaintext
 
             except Exception as e:
+                logging.getLogger("vault.audit").warning("vault_audit op=resolve decision=deny error=Integrity token_id=%s tenant_id=%s", token_id, tenant_id)
                 raise IntegrityError(f"Failed to decrypt token {token_id}: {e}")
 
         except (NotFoundError, PermissionError, IntegrityError):
             raise
         except Exception as e:
             logger.error(f"Failed to resolve token {token_id}: {e}")
+            logging.getLogger("vault.audit").warning("vault_audit op=resolve decision=deny error=Vault token_id=%s tenant_id=%s", token_id, tenant_id)
             raise VaultError(f"Token resolution failed: {e}")
 
     def exists(self, *, token_id: str, scope: Scope) -> bool:

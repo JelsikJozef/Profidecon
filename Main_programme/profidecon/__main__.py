@@ -25,6 +25,8 @@ from Main_programme.preprocessor.taxonomy.analyzer import main as analyze_taxono
 from Main_programme.vectorizer import load_folder
 from Main_programme.preprocessor.processors.pseudonymizer import Pseudonymizer
 from Main_programme.preprocessor.processors.pii_analyzer import PiiAnalyzer
+from Main_programme.preprocessor.cli import run_enrich_llm, run_pseudonymization
+from Main_programme.preprocessor.middleware.response_deanonymizer import ResponseDeanonymizer, DefaultDeanonymizationPolicy
 import json
 import time
 
@@ -321,6 +323,41 @@ def pseudonymize(ctx, input: Path, output: Path, scope: str, tenant_id: Optional
         sys.exit(1)
 
 
+@profidecon.command('enrich-llm')
+@click.option('--input', '-i', type=click.Path(exists=True, file_okay=False, path_type=Path), required=True,
+              help='Input Phase-2 directory with JSONL files')
+@click.option('--output', '-o', type=click.Path(file_okay=False, path_type=Path), required=True,
+              help='Output Phase-3 directory')
+@click.option('--model', required=True, type=str, help='LLM model ID')
+@click.option('--temperature', type=float, default=0.0, show_default=True)
+@click.option('--max-tokens', 'max_tokens', type=int, default=512, show_default=True)
+@click.option('--max-tokens-input', 'max_tokens_input', type=int, default=4096, show_default=True)
+@click.option('--skip-if-present', type=bool, default=True, show_default=True, help='Skip docs already enriched')
+@click.pass_context
+def enrich_llm(ctx, input: Path, output: Path, model: str, temperature: float, max_tokens: int, max_tokens_input: int, skip_if_present: bool):
+    """Phase-3: Enrich pseudonymized documents with LLM (uses text_pseudo only)."""
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting Phase-3 LLM enrichment: {input} → {output}")
+    try:
+        run_enrich_llm(
+            input,
+            output,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            skip_if_present=skip_if_present,
+            max_tokens_input=max_tokens_input,
+        )
+        logger.info("✅ LLM enrichment completed successfully")
+    except SystemExit as e:  # propagate non-zero exit on errors
+        raise
+    except Exception as e:
+        logger.error(f"❌ LLM enrichment failed: {e}")
+        if ctx.obj.get('verbose'):
+            logger.exception("Full traceback:")
+        sys.exit(1)
+
+
 @profidecon.command()
 @click.pass_context
 def version(ctx):
@@ -374,5 +411,133 @@ def full_pipeline(ctx, input: Path, preprocessed: Path, taxonomy_out: Path, skip
         sys.exit(1)
 
 
-if __name__ == '__main__':
-    profidecon()
+@profidecon.command('dev-deanonymize')
+@click.option('--input', '-i', type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True,
+              help='Input Phase-3 JSONL file (must contain text_pseudo)')
+@click.option('--tenant-id', required=True, type=str, help='Tenant ID for resolution scope')
+@click.option('--role', 'roles', multiple=True, type=str, help='Actor role(s); can be passed multiple times')
+@click.option('--device', type=str, default='edge_trusted', show_default=True, help='Device trust level')
+@click.option('--scope', type=click.Choice(['tenant','global']), default='tenant', show_default=True)
+@click.pass_context
+def dev_deanonymize(ctx, input: Path, tenant_id: str, roles: tuple[str, ...], device: str, scope: str):
+    """DEV-ONLY: Preview de-anonymized text on screen with masking. No persistence."""
+    logger = logging.getLogger(__name__)
+    if os.getenv('ALLOW_DEV_DEANON', 'false').lower() != 'true':
+        click.echo('\n' + '='*80)
+        click.echo('DEV-ONLY DE-ANONYMIZATION IS DISABLED. Set ALLOW_DEV_DEANON=true to enable.')
+        click.echo('='*80 + '\n')
+        sys.exit(1)
+
+    # Force masked return even if code is misused on server
+    os.environ['DEANON_PERSIST_SERVER'] = 'true'
+
+    try:
+        raw = input.read_text(encoding='utf-8').splitlines()[0]
+        data = json.loads(raw)
+    except Exception as e:
+        logger.error(f"Failed to read {input.name}: {e}")
+        sys.exit(1)
+
+    text_pseudo = data.get('text_pseudo') or ''
+    if not text_pseudo:
+        click.echo('Input file does not contain text_pseudo; nothing to de-anonymize.')
+        sys.exit(1)
+
+    class _Actor:
+        def __init__(self, tenant_id: str, roles: list[str], device: str):
+            self.tenant_id = tenant_id
+            self.roles = roles
+            self.device_trust_level = device
+            self.request_id = f"dev-{int(time.time()*1000)}"
+
+    actor = _Actor(tenant_id=tenant_id, roles=list(roles) if roles else ['case_handler'], device=device)
+    de = ResponseDeanonymizer(DefaultDeanonymizationPolicy())
+    preview = de.run(text_pseudo, actor=actor, scope=scope)
+
+    banner = ('\n' + '!'*80 + '\n' +
+              'DEV-ONLY, DO NOT USE IN PROD — DE-ANONYMIZATION PREVIEW (MASKED)\n' +
+              '!'*80 + '\n')
+    click.echo(banner)
+    click.echo(preview)
+    click.echo(banner)
+
+
+@profidecon.command('easy-run')
+@click.option('--input', '-i', type=click.Path(exists=True, file_okay=False, path_type=Path), required=True,
+              help='Input root with documents (e.g., Knowledge/Nemecke_DPH)')
+@click.option('--run-dir', '-r', type=click.Path(file_okay=False, path_type=Path),
+              help='Run directory to store phase outputs (default: Runs/<input_name>)')
+@click.option('--tenant-id', type=str, default=None, help='Tenant ID used for pseudonymization')
+@click.option('--scope', type=click.Choice(['tenant','global']), default='tenant', show_default=True)
+@click.option('--model', type=str, default='gpt-4o-mini', help='LLM model for Phase-3 (ignored if phase 3 skipped)')
+@click.option('--phases', type=str, default='1,2,3', help='Comma-separated phases to run, e.g., 1,2 or 2,3')
+@click.pass_context
+def easy_run(ctx, input: Path, run_dir: Path | None, tenant_id: str | None, scope: str, model: str, phases: str):
+    """Run phases 1–3 with a single command and standard folder layout."""
+    logger = logging.getLogger(__name__)
+    base = run_dir or Path('Runs') / input.name
+    p1 = base / 'phase1'
+    p2 = base / 'phase2'
+    p3 = base / 'phase3'
+    for d in (base, p1, p2, p3):
+        d.mkdir(parents=True, exist_ok=True)
+
+    selected = {p.strip() for p in (phases.split(',') if phases else [])}
+    if not selected:
+        selected = {'1','2','3'}
+
+    logger.info(f"Easy-run starting: input={input} run_dir={base} phases={sorted(selected)}")
+
+    # Phase-1: preprocess
+    if '1' in selected:
+        logger.info(f"[Phase-1] Writing to {p1}")
+        try:
+            run_pipeline(input, p1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            logger.error(f"Phase-1 failed: {e}")
+            sys.exit(1)
+
+    # Phase-2: pseudonymize
+    if '2' in selected:
+        logger.info(f"[Phase-2] Input={p1} → Output={p2}")
+        try:
+            run_pseudonymization(
+                input_dir=p1,
+                output_dir=p2,
+                scope=scope,
+                tenant_id=tenant_id,
+                types_include=None,
+                types_exclude=None,
+                max_entities=None,
+                require_annotations=False,
+                force=True,
+            )
+        except SystemExit:
+            raise
+        except Exception as e:
+            logger.error(f"Phase-2 failed: {e}")
+            sys.exit(1)
+
+    # Phase-3: enrich-llm
+    if '3' in selected:
+        logger.info(f"[Phase-3] Input={p2} → Output={p3} model={model}")
+        try:
+            run_enrich_llm(
+                input_dir=p2,
+                output_dir=p3,
+                model=model,
+                temperature=0.0,
+                max_tokens=512,
+                skip_if_present=True,
+                max_tokens_input=4096,
+            )
+        except SystemExit:
+            raise
+        except Exception as e:
+            logger.error(f"Phase-3 failed: {e}")
+            sys.exit(1)
+
+    logger.info("Easy-run complete")
+

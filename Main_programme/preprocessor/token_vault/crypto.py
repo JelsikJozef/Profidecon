@@ -29,7 +29,8 @@ class CryptoManager:
         self.hmac_key = self._get_hmac_key()
         # Initialize salt before KEK so we can use it for derivation
         self.salt_v1 = self._get_salt()
-        self.kek = self._get_kek()
+        # KEK rotation support
+        self.kek_list = self._get_keks()
         self.token_id_bytes = int(os.getenv("TOKEN_ID_BYTES", "10"))
 
     def _get_hmac_key(self) -> bytes:
@@ -43,8 +44,49 @@ class CryptoManager:
         else:
             return key_material.encode('utf-8')
 
-    def _get_kek(self) -> Optional[bytes]:
-        """Get Key Encryption Key from environment and normalize key length."""
+    def _get_keks(self) -> list[bytes]:
+        """Load one or more KEKs. If VAULT_KEYS_JSON is set, use active key for encrypt and try all for decrypt.
+        Fallback to single KEK_MATERIAL env if provided; otherwise return empty (dev mode)."""
+        cfg_path = os.getenv("VAULT_KEYS_JSON")
+        keks: list[bytes] = []
+        if cfg_path and os.path.exists(cfg_path):
+            try:
+                import json
+                data = json.load(open(cfg_path, 'r', encoding='utf-8'))
+                active_id = data.get('active')
+                items = data.get('kek_versions') or []
+                # Put active first
+                active = next((it for it in items if it.get('id') == active_id), None)
+                rest = [it for it in items if it is not active]
+                ordered = [active] + rest if active else items
+                for it in ordered:
+                    mat = it.get('material') if isinstance(it, dict) else None
+                    if not mat:
+                        continue
+                    if str(mat).startswith('base64:'):
+                        kek_bytes = base64.b64decode(str(mat)[7:])
+                    else:
+                        kek_bytes = str(mat).encode('utf-8')
+                    if len(kek_bytes) not in (16, 24, 32):
+                        kdf = PBKDF2HMAC(
+                            algorithm=hashes.SHA256(),
+                            length=32,
+                            salt=self.salt_v1 or b"vault_kek_salt",
+                            iterations=200_000,
+                        )
+                        kek_bytes = kdf.derive(kek_bytes)
+                    keks.append(kek_bytes)
+            except Exception as e:
+                logger.warning("Failed to load VAULT_KEYS_JSON: %s", e)
+        # Fallback to single KEK_MATERIAL
+        if not keks:
+            single = self._get_kek_legacy()
+            if single:
+                keks = [single]
+        return keks
+
+    def _get_kek_legacy(self) -> Optional[bytes]:
+        """Legacy single KEK loader for KEK_MATERIAL env."""
         kek_material = os.getenv("KEK_MATERIAL")
         if not kek_material:
             logger.warning("KEK_MATERIAL not set, envelope encryption disabled")
@@ -185,13 +227,13 @@ class CryptoManager:
 
     def _encrypt_data_key(self, data_key: bytes) -> bytes:
         """Encrypt data key with KEK (envelope encryption)."""
-        if not self.kek:
+        if not self.kek_list:
             # No envelope encryption, return data key as-is (dev mode)
             logger.warning("No KEK configured, using plaintext data key (insecure)")
             return data_key
 
-        # Simple envelope encryption with KEK
-        aes_gcm = AESGCM(self.kek)
+        # Use primary KEK (index 0)
+        aes_gcm = AESGCM(self.kek_list[0])
         nonce = os.urandom(12)  # 96-bit nonce for GCM
         ciphertext = aes_gcm.encrypt(nonce, data_key, None)
 
@@ -199,8 +241,8 @@ class CryptoManager:
         return nonce + ciphertext
 
     def _decrypt_data_key(self, encrypted_key: bytes) -> bytes:
-        """Decrypt data key with KEK."""
-        if not self.kek:
+        """Decrypt data key with KEK. Try all configured KEKs for rotation support."""
+        if not self.kek_list:
             # No envelope encryption, return as-is (dev mode)
             return encrypted_key
 
@@ -208,11 +250,15 @@ class CryptoManager:
         nonce = encrypted_key[:12]
         ciphertext = encrypted_key[12:]
 
-        aes_gcm = AESGCM(self.kek)
-        try:
-            return aes_gcm.decrypt(nonce, ciphertext, None)
-        except Exception as e:
-            raise EncryptionError(f"Failed to decrypt data key: {e}")
+        last_err: Optional[Exception] = None
+        for kek in self.kek_list:
+            aes_gcm = AESGCM(kek)
+            try:
+                return aes_gcm.decrypt(nonce, ciphertext, None)
+            except Exception as e:
+                last_err = e
+                continue
+        raise EncryptionError(f"Failed to decrypt data key with all KEKs: {last_err}")
 
     def aesgcm_encrypt(self, plaintext: str) -> Tuple[bytes, bytes, bytes, bytes]:
         """

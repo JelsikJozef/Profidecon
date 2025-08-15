@@ -36,6 +36,38 @@ profidecon --help
 - CLI entry point je v `Main_programme/profidecon/__main__.py`.
 - Všetky príkazy spúšťajte z koreňa projektu.
 
+### ⚡️ Quickstart: Celý pipeline end-to-end
+
+```bash
+# Fáza-1: Preprocessing → JSONL
+profidecon preprocess --input ./Knowledge --output ./Preprocessed
+
+# Fáza-2: Pseudonymizácia (nahradí PII tokenmi)
+profidecon pseudonymize \
+  --input ./Preprocessed \
+  --output ./Preprocessed_Phase2 \
+  --scope tenant \
+  --tenant-id default-tenant
+
+# Fáza-3: LLM obohatenie na pseudonymizovanom texte
+profidecon enrich-llm \
+  --input ./Preprocessed_Phase2 \
+  --output ./Preprocessed_Phase3 \
+  --model gpt-4o-mini
+
+# Voliteľne: Taxonómia
+profidecon taxonomy-extract ./Knowledge --out metadata_raw.jsonl
+profidecon taxonomy-analyze ./Knowledge --preprocessed ./Preprocessed --out taxonomy.json
+```
+
+One‑shot príkaz pre celú trasu:
+```bash
+profidecon full-pipeline \
+  --input ./Knowledge \
+  --preprocessed ./Preprocessed \
+  --taxonomy-out ./taxonomy.json
+```
+
 ## 📋 Príklad workflow
 
 ### 1. Spracovanie dokumentov
@@ -45,7 +77,8 @@ profidecon preprocess --input ./Knowledge --output ./Preprocessed
 
 ### 2. Vytvorenie taxonómie
 ```bash
-profidecon taxonomy-analyze --input ./Preprocessed --output ./Taxonomy
+profidecon taxonomy-extract ./Knowledge --out metadata_raw.jsonl
+profidecon taxonomy-analyze ./Knowledge --preprocessed ./Preprocessed --out taxonomy.json
 ```
 
 ### 3. Načítanie dual vectors do Qdrant
@@ -53,7 +86,13 @@ profidecon taxonomy-analyze --input ./Preprocessed --output ./Taxonomy
 profidecon vector-load ./Preprocessed --glob "*.jsonl"
 ```
 
-### 4. Hybridné vyhľadávanie
+### 4. Pseudonymizácia a LLM obohatenie (ak používate Phase‑2 a Phase‑3)
+```bash
+profidecon pseudonymize --input ./Preprocessed --output ./Preprocessed_Phase2 --scope tenant
+profidecon enrich-llm --input ./Preprocessed_Phase2 --output ./Preprocessed_Phase3 --model gpt-4o-mini
+```
+
+### 5. Hybridné vyhľadávanie
 
 ```python
 from Main_programme.sdk.retrieval import RetrievalEngine
@@ -79,7 +118,7 @@ for i, result in enumerate(results, 1):
         print(f"   🎯 Matched tags: {result.matched_tags}")
 ```
 
-### 5. Summary Vector Search
+### 6. Summary Vector Search
 ```python
 # Vyhľadávanie v summary embeddings
 summary_results = engine.search_summary_vector(

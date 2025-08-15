@@ -18,7 +18,7 @@ import logging
 import re
 from collections import defaultdict, Counter
 from pathlib import Path
-from typing import Dict, List, Set, Any, Optional
+from typing import Dict, List, Set, Any, Optional, Tuple
 from dataclasses import dataclass
 import os
 
@@ -436,6 +436,90 @@ class TaxonomyAnalyzer:
             print(f"  • {country}: {count}")
             
         print("\n" + "="*60)
+
+
+def load_raw_metadata(preprocessed_dir: Path) -> List[Dict[str, Any]]:
+    """
+    Load one JSON object per JSONL file (first line) from a directory.
+    Returns a list of dict records.
+    """
+    records: List[Dict[str, Any]] = []
+    preprocessed_dir = Path(preprocessed_dir)
+    for p in sorted(preprocessed_dir.glob("*.jsonl")):
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                line = f.readline()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if isinstance(rec, dict):
+                    records.append(rec)
+        except Exception as e:
+            logger.error("Failed to read %s: %s", p.name, e)
+    return records
+
+
+def build_tag_corpus(records: List[Dict[str, Any]]) -> Tuple["Any", List[str]]:
+    """
+    Build a TF-IDF matrix from a list of records with 'tags' arrays.
+    Returns (X, feature_names)
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    docs: List[str] = []
+    for rec in records:
+        tags = rec.get("tags") or []
+        if isinstance(tags, list):
+            docs.append(" ".join(str(t) for t in tags))
+        else:
+            docs.append("")
+    vec = TfidfVectorizer(token_pattern=r"[^\s]+")
+    X = vec.fit_transform(docs)
+    features = list(vec.get_feature_names_out())
+    return X, features
+
+
+def cluster_tags(X: "Any", n_clusters: int = 5) -> List[int]:
+    """
+    Cluster documents by tag vectors using KMeans. Returns label list.
+    """
+    from sklearn.cluster import KMeans
+
+    if getattr(X, "shape", None) is None or X.shape[0] == 0:
+        return []
+    k = max(1, min(n_clusters, X.shape[0]))
+    # n_init='auto' for sklearn>=1.4 compatibility
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    labels = kmeans.fit_predict(X)
+    return list(map(int, labels))
+
+
+def propose_taxonomy(tags: List[str]) -> Dict[str, Any]:
+    """
+    Ask an LLM (OpenAI-style) to propose a JSON taxonomy given a list of tags.
+    For tests, this uses openai.ChatCompletion.create which is monkeypatched there.
+    """
+    import openai  # type: ignore
+
+    prompt = (
+        "You are a helpful assistant. Given the following tags, propose a compact JSON taxonomy tree "
+        "grouping related tags. Return ONLY valid JSON.\n\nTags: " + ", ".join(tags)
+    )
+    try:
+        resp = openai.ChatCompletion.create(  # type: ignore[attr-defined]
+            model="gpt-3.5-turbo",
+            messages=[{"role": "system", "content": prompt}],
+            max_tokens=400,
+            temperature=0.0,
+        )
+        content = resp.choices[0].message.content  # type: ignore[index]
+        data = json.loads(content)
+        if isinstance(data, dict):
+            return data
+    except Exception as e:
+        logger.error("propose_taxonomy failed: %s", e)
+    # Fallback naive taxonomy
+    return {"Root": {"Tags": list(tags)}}
 
 
 def main(preprocessed_dir: str = "Preprocessed", output_dir: str = "Taxonomy"):

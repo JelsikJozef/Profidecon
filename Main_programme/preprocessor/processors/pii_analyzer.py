@@ -8,9 +8,10 @@ altering the input text.
 Supported backends:
 - regex: Baseline regex patterns (no external dependencies)
 - presidio: Microsoft Presidio (if available, falls back to regex)
+- auto: Prefer Presidio when available, otherwise regex
 
 Environment configuration:
-- PII_BACKEND: regex|presidio (default: regex)
+- PII_BACKEND: regex|presidio|auto (default: regex)
 - PII_LANGS: auto|en,sk,de,... (language hints)
 - PII_RETURN_VALUES: true|false (return raw values or None)
 - PII_MIN_CONFIDENCE: 0.60 (minimum confidence threshold)
@@ -24,7 +25,7 @@ import re
 import logging
 from typing import TypedDict, Protocol, List, Optional, Dict, Set
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
+
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,8 @@ class PiiConfig:
     types_include: Optional[Set[str]] = None
     types_exclude: Optional[Set[str]] = None
     max_entities_per_doc: int = 1000
+    # Optional: map of lang->spaCy model for Presidio (e.g., "en:en_core_web_lg,de:de_core_news_md")
+    presidio_spacy_models: Optional[Dict[str, str]] = None
 
     @classmethod
     def from_env(cls) -> 'PiiConfig':
@@ -77,6 +80,20 @@ class PiiConfig:
         exclude_str = os.getenv("PII_TYPES_EXCLUDE")
         if exclude_str:
             config.types_exclude = set(t.strip().upper() for t in exclude_str.split(","))
+
+        # Parse Presidio spaCy models mapping if provided
+        models_str = os.getenv("PRESIDIO_SPACY_MODELS")
+        if models_str:
+            mapping: Dict[str, str] = {}
+            for pair in models_str.split(','):
+                if ':' in pair:
+                    lang, model = pair.split(':', 1)
+                    lang = lang.strip().lower()
+                    model = model.strip()
+                    if lang and model:
+                        mapping[lang] = model
+            if mapping:
+                config.presidio_spacy_models = mapping
 
         return config
 
@@ -121,8 +138,10 @@ class RegexPiiDetector:
             "flags": 0
         },
         "PERSON_NAME": {
-            # Names with diacritics (simplified heuristic)
-            "pattern": r'\b[A-ZÁČĎÉĚÍĽĹŇÓÔŔŠŤÚŮÝŽ][a-záčďéěíľĺňóôŕšťúůýž]+(?:\s+[A-ZÁČĎÉĚÍĽĹŇÓÔŔŠŤÚŮÝŽ][a-záčďéěíľĺňóôŕšťúůýž]+)+\b',
+            # Names with diacritics (extended with German umlauts, supports hyphenated tokens)
+            # Token: Capital letter + 1..30 lowercase letters, optional hyphen + another token
+            # Two or three tokens total to form a full name (reduces backtracking on large texts)
+            "pattern": r'\b[A-ZA-ZÁÄČĎÉĚÍĽĹŇÓÔÖŔŠŤÚŮÜÝŽ][a-zA-Záäčďéěíľĺňóôöŕšťúůüýžß]{1,30}(?:-[A-ZÁÄČĎÉĚÍĽĹŇÓÔÖŔŠŤÚŮÜÝŽ][a-zA-Záäčďéěíľĺňóôöŕšťúůüýžß]{1,30})?(?:\s+[A-ZÁÄČĎÉĚÍĽĹŇÓÔÖŔŠŤÚŮÜÝŽ][a-zA-Záäčďéěíľĺňóôöŕšťúůüýžß]{1,30}(?:-[A-ZÁÄČĎÉĚÍĽĹŇÓÔÖŔŠŤÚŮÜÝŽ][a-zA-Záäčďéěíľĺňóôöŕšťúůüýžß]{1,30})?){1,2}\b',
             "confidence": 0.65,
             "flags": 0
         },
@@ -145,6 +164,28 @@ class RegexPiiDetector:
         }
     }
 
+    # Common German first names (lowercase) for lightweight validation
+    _DE_FIRST_NAMES: Set[str] = {
+        'hans','peter','michael','thomas','klaus','wolfgang','andreas','stefan','christian','johannes',
+        'karl','markus','matthias','uwe','jörg','jürgen','heinz','heinrich','dieter','franz','paul','georg','ludwig',
+        'ralf','holger','günter','gerhard','helmut','martin','sebastian','patrick','jan','alexander','luca','leon',
+        'maximilian','jonas','felix','niklas','tobias','philip','philipp','robert','dominik',
+        'anna','maria','julia','katharina','katrin','sabine','monika','karin','claudia','susanne','petra','andrea',
+        'nicole','lisa','laura','sarah','sophie','emma','johanna','lea','leonie'
+    }
+
+    # German tokens that commonly appear capitalized but are not person names
+    _DE_NON_NAME_TOKENS: Set[str] = {
+        'sehr','geehrte','geehrter','damen','herren','mit','freundlichen','grüßen','grueszen','grussen','vielen','dank',
+        'kontakt','kontaktieren','ihre','ihr','ihnen','sie','wir','uns','bitte','anlage','betreff','rechnung','angebot',
+        'bestellung','kunde','lieferung','straße','strasse','bahn','bahnhof','montag','dienstag','mittwoch','donnerstag',
+        'freitag','samstag','sonntag','januar','februar','märz','maerz','april','mai','juni','juli','august','september',
+        'oktober','november','dezember'
+    }
+
+    # German honorifics/title cues to boost person name confidence
+    _DE_HONORIFICS: Set[str] = {'herr', 'frau', 'hr.', 'fr.', 'dr.', 'prof.', 'prof. dr.'}
+
     def __init__(self, config: PiiConfig):
         self.config = config
         self._compiled_patterns = {}
@@ -157,8 +198,8 @@ class RegexPiiDetector:
             flags = pattern_info.get("flags", 0)
             self._compiled_patterns[entity_type] = re.compile(pattern, flags)
 
-    def _calculate_confidence(self, entity_type: str, match: re.Match, text: str) -> float:
-        """Calculate confidence score for a match."""
+    def _calculate_confidence(self, entity_type: str, match: re.Match, text: str, *, locale: Optional[str]) -> float:
+        """Calculate confidence score for a match, with locale-aware adjustments."""
         base_confidence = self.PATTERNS[entity_type]["confidence"]
         matched_text = match.group()
 
@@ -179,6 +220,10 @@ class RegexPiiDetector:
         if entity_type in ["ID_NUMBER", "PASSPORT"] and self._looks_like_business_id(matched_text, text, start):
             context_bonus -= 0.3
 
+        # Additional heuristics for person names, especially in German text
+        if entity_type == "PERSON_NAME":
+            context_bonus += self._adjust_person_name_confidence(matched_text, text, start, end, locale)
+
         final_confidence = min(1.0, base_confidence + length_bonus + context_bonus)
         return max(0.0, final_confidence)
 
@@ -197,13 +242,77 @@ class RegexPiiDetector:
 
         return any(keyword in context for keyword in business_keywords)
 
+    def _adjust_person_name_confidence(self, name: str, full_text: str, start: int, end: int, locale: Optional[str]) -> float:
+        """Heuristic adjustment for PERSON_NAME confidence with German-specific filtering.
+
+        Positive signals add up to +0.25, negative up to -0.6. Net result is added to base.
+        """
+        # Determine if we should apply German-specific logic (localized to the name's context)
+        context_slice = full_text[max(0, start-40):min(len(full_text), end+40)]
+        context_lower = context_slice.lower()
+        name_lower = name.lower()
+        german_cues = {
+            'kontaktieren', 'oder', 'und', 'unter', 'straße', 'strasse', 'herr', 'frau',
+            'mit freundlichen grüßen', 'mit freundlichen gruessen'
+        }
+        is_german = (
+            locale == 'de' or
+            bool(re.search(r'[äöüß]', name_lower)) or
+            any(cue in context_lower for cue in german_cues)
+        )
+
+        # Tokenize name
+        tokens = [t for t in re.split(r"\s+", name) if t]
+        lower_tokens = [t.lower() for t in tokens]
+        adj = 0.0
+
+        # Boost: honorifics immediately before the name (within 10 chars)
+        pre_window = full_text[max(0, start-15):start].strip().lower()
+        for honor in self._DE_HONORIFICS:
+            if pre_window.endswith(honor):
+                adj += 0.15
+                break
+
+        # Boost: first token is a common German first name
+        if lower_tokens:
+            first = lower_tokens[0]
+            if first in self._DE_FIRST_NAMES:
+                adj += 0.10
+
+        # Boost: hyphenated given names are common and reduce ambiguity
+        if '-' in tokens[0]:
+            adj += 0.05
+
+        # Penalize patterns typical for salutations or capitalized nouns sequences in German
+        if is_german:
+            # Strong penalty if any token is in common non-name capitalized vocabulary
+            if any(t in self._DE_NON_NAME_TOKENS for t in lower_tokens):
+                adj -= 0.45
+
+            # Penalty if the span appears at the very start of a sentence and contains pronouns
+            prev_char = full_text[start-1] if start > 0 else '\n'
+            if prev_char in '.!?\n' and any(t in {"sie", "wir", "ich"} for t in lower_tokens):
+                adj -= 0.20
+
+            # If none of the positive cues hit, be conservative in German
+            if adj <= 0.0:
+                adj -= 0.20
+
+        # Light penalty if tokens are too short (e.g., "Es Ist")
+        if all(len(t) <= 3 for t in tokens):
+            adj -= 0.15
+
+        # Cap adjustments to reasonable bounds
+        adj = max(-0.60, min(0.25, adj))
+        return adj
+
     def detect(self, text: str, *, locale: Optional[str] = None) -> List[PiiEntity]:
         """Detect PII entities using regex patterns."""
         entities = []
 
         for entity_type, compiled_pattern in self._compiled_patterns.items():
             for match in compiled_pattern.finditer(text):
-                confidence = self._calculate_confidence(entity_type, match, text)
+                confidence = self._calculate_confidence(entity_type, match, text, locale=locale)
 
                 # Skip low confidence matches
                 if confidence < self.config.min_confidence:
@@ -247,10 +356,32 @@ class PresidioPiiDetector:
         self._init_presidio()
 
     def _init_presidio(self):
-        """Initialize Presidio analyzer if available."""
+        """Initialize Presidio analyzer if available, with optional spaCy NLP engine."""
         try:
             from presidio_analyzer import AnalyzerEngine
-            self.analyzer = AnalyzerEngine()
+            nlp_engine = None
+
+            # If spaCy models are configured via env, try to set up a multi-language spaCy NLP engine
+            if self.config.presidio_spacy_models:
+                try:
+                    from presidio_analyzer.nlp_engine import NlpEngineProvider
+                    nlp_configuration = {
+                        "nlp_engine_name": "spacy",
+                        "models": [{"lang_code": lang, "model_name": model}
+                                    for lang, model in self.config.presidio_spacy_models.items()]
+                    }
+                    provider = NlpEngineProvider(nlp_configuration=nlp_configuration)
+                    nlp_engine = provider.create_engine()
+                    logger.info("Presidio using spaCy NLP engine with models: %s", self.config.presidio_spacy_models)
+                except Exception as e:
+                    logger.warning("Failed to initialize spaCy NLP engine for Presidio: %s. Falling back to default.", e)
+
+            # Initialize AnalyzerEngine, optionally with custom nlp_engine
+            if nlp_engine is not None:
+                self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine)
+            else:
+                self.analyzer = AnalyzerEngine()
+
             logger.info("Presidio analyzer initialized successfully")
         except ImportError:
             logger.warning("Presidio not available, will fall back to regex backend")
@@ -265,7 +396,7 @@ class PresidioPiiDetector:
 
         try:
             # Use Presidio for detection
-            language = self._get_presidio_language(locale)
+            language = self._get_presidio_language(locale, text)
             results = self.analyzer.analyze(text=text, language=language)
 
             entities = []
@@ -295,21 +426,41 @@ class PresidioPiiDetector:
             regex_detector = RegexPiiDetector(self.config)
             return regex_detector.detect(text, locale=locale)
 
-    def _get_presidio_language(self, locale: Optional[str]) -> str:
-        """Map locale to Presidio language code."""
-        if not locale:
+    def _auto_language(self, text: str) -> str:
+        """Lightweight auto language detection among {'en','de','es','fr','it'} with Slovak fallback to 'en'."""
+        sample = text[:500].lower()
+        # German cues
+        if re.search(r"[äöüß]", sample) or any(cue in sample for cue in [" kontaktieren ", " unter ", "straße", "strasse", " herr ", " frau "]):
+            return "de"
+        # Slovak/Czech diacritics -> Presidio doesn't support, use English models heuristically
+        if re.search(r"[áäčďéíľĺňóôŕšťúůýž]", sample):
             return "en"
+        # Very naive English fallback
+        return "en"
 
-        # Simple mapping - can be extended
-        locale_mapping = {
-            "sk": "en",  # Presidio doesn't support Slovak, use English
-            "de": "de",
-            "es": "es",
-            "fr": "fr",
-            "it": "it"
-        }
+    def _get_presidio_language(self, locale: Optional[str], text: Optional[str] = None) -> str:
+        """Map locale or text to Presidio language code, with auto-detection if needed."""
+        if locale:
+            # Simple mapping - can be extended
+            locale_mapping = {
+                "sk": "en",  # Presidio doesn't support Slovak, use English
+                "de": "de",
+                "es": "es",
+                "fr": "fr",
+                "it": "it"
+            }
+            return locale_mapping.get(locale, "en")
 
-        return locale_mapping.get(locale, "en")
+        # If specific languages provided via PII_LANGS and not auto, pick the first
+        if self.config.langs and self.config.langs != "auto":
+            first = self.config.langs.split(',')[0].strip().lower()
+            return self._get_presidio_language(first)
+
+        # Auto-detect from text when possible
+        if text:
+            return self._auto_language(text)
+
+        return "en"
 
 
 class PiiAnalyzer:
@@ -325,20 +476,33 @@ class PiiAnalyzer:
         """
         self.config = PiiConfig.from_env()
 
-        # Override config with provided arguments
-        if backend != "regex":
-            self.config.backend = backend
-
+        # Override config with provided arguments (backend argument always wins over env)
+        self.config.backend = backend
         for key, value in kwargs.items():
             if hasattr(self.config, key):
                 setattr(self.config, key, value)
 
         self.detector = self._create_detector()
 
+    def _is_presidio_available(self) -> bool:
+        """Check if Presidio is importable in this environment."""
+        try:
+            import importlib
+            importlib.import_module('presidio_analyzer')
+            return True
+        except Exception:
+            return False
+
     def _create_detector(self) -> PiiDetector:
         """Create the appropriate detector based on configuration."""
         if self.config.backend == "presidio":
             return PresidioPiiDetector(self.config)
+        elif self.config.backend == "auto":
+            if self._is_presidio_available():
+                return PresidioPiiDetector(self.config)
+            else:
+                logger.info("PII backend auto: Presidio not available, using regex")
+                return RegexPiiDetector(self.config)
         else:
             return RegexPiiDetector(self.config)
 
